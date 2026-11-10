@@ -50,7 +50,9 @@ configuration change. Unknown fields are rejected, not ignored.
 no OS service; each running command has a private Unix control socket under the
 state directory. One server runs per state directory, because its background
 Task observer must be the only one there; a second server on the same directory is
-refused. Give each MCP client its own `--state-dir`. Each state directory
+refused. Give each MCP client its own `--state-dir` under
+`~/.local/state/local-agent-tools/`, which scoped commands cannot reach; a state
+directory or custom `--config` elsewhere is protected only for its own server. Each state directory
 coordinates only itself: workspace leases, writer locks, Task reservations and
 change records do not cover other clients, so give concurrent clients separate
 workspaces or worktrees.
@@ -58,7 +60,8 @@ workspaces or worktrees.
 ## Connect a client
 
 The MCP client starts the server as a stdio subprocess and owns its lifetime, for
-example `local-agent-tools --state-dir /absolute/state/for-this-client serve`.
+example `local-agent-tools --state-dir ~/.local/state/local-agent-tools/this-client serve`
+(use the absolute path).
 Any MCP client works; the server does not depend on a particular client or model
 provider. A completed handshake is not proof that the client approved every tool.
 

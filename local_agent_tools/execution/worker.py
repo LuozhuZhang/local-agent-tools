@@ -146,22 +146,18 @@ def _git_identity() -> dict[str, str]:
     return identity
 
 
-def _scoped_launch(record: dict) -> tuple[str | None, dict | None]:
-    """Return the verified original profile and constructed environment, or no sandbox."""
+def _scoped_profile(record: dict) -> str | None:
+    """The verified original profile, or no sandbox."""
     scope = record.get("scope")
     if scope is None:
-        return None, None
+        return None
     text = record["sandbox_profile"]
     if seatbelt.digest(text) != scope["profile_sha256"] or seatbelt.unavailable_reason() is not None:
         raise Fault("scope_backend_failed", "The original operation scope cannot be applied; no command was launched.")
-    private = Path(scope["private"])
-    seatbelt.prepare(private, _git_identity())
-    return text, seatbelt.environment(os.environ, private)
+    return text
 
 
 def _remove_private(record: dict) -> None:
-    if record.get("scope") is None:
-        return
     try:
         shutil.rmtree(record["scope"]["private"])
         record["private_cleanup"] = "verified"
@@ -186,7 +182,7 @@ def worker(directory: Path, worker_fd: int, *owned_fds: int) -> None:
                 del os.environ[name]
     original_worktree = record["context"]["worktree"]
     process = None
-    foreign_private = False
+    owns_private = False
     interrupted = False
     preparation_deadline = time.monotonic() + PREPARE_SECONDS
 
@@ -228,14 +224,17 @@ def worker(directory: Path, worker_fd: int, *owned_fds: int) -> None:
                                                       directory, record, process, selector, _publish)
                         try:
                             native_boot = boot_identity()
-                            sandbox, environment = _scoped_launch(record)
+                            sandbox, environment = _scoped_profile(record), None
+                            if sandbox is not None:
+                                private = Path(record["scope"]["private"])
+                                seatbelt.claim(private)
+                                owns_private = True
+                                seatbelt.prepare(private, _git_identity())
+                                environment = seatbelt.environment(os.environ, private)
                             process.launch(request["argv"], request["cwd"], owned_fds, tty=request["tty"],
                                            terminal_size=request["terminal_size"], deadline=preparation_deadline,
                                            sandbox=sandbox, env=environment)
                         except (OSError, ValueError, Fault, subprocess.SubprocessError) as error:
-                            # A private directory that already existed belongs to someone else: never remove it.
-                            foreign_private = (isinstance(error, FileExistsError) and record.get("scope") is not None
-                                               and error.filename == record["scope"]["private"])
                             record["error"] = ("launch_unverified" if process.launch_uncertain else
                                                error.code if isinstance(error, Fault) else type(error).__name__)
                         if process.pid is not None:
@@ -275,7 +274,8 @@ def worker(directory: Path, worker_fd: int, *owned_fds: int) -> None:
         record["control_ready"] = False
         if process is not None:
             process.close()
-        if not foreign_private:
+        # Only a private directory this worker created is removed; an existing one belongs to someone else.
+        if owns_private:
             _remove_private(record)
     # Readers cannot observe the lease-release/publication gap as a lost worker.
     with lease(directory / "control.lock", wait=True, create=False):

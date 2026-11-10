@@ -17,6 +17,7 @@ from local_agent_tools.foundation.sanitize import Fault
 
 MAX_SOURCE_BYTES = 65536
 COMMAND_SECONDS = 5
+CLEANUP_SECONDS = 0.1
 
 
 def sample(source: str, scope: str, units: str, reader: Callable) -> dict:
@@ -50,37 +51,43 @@ def _read(path: Path | str) -> str:
 def _command(argv: tuple[str, ...]) -> str:
     # Call sites contain only fixed absolute system tools/arguments. No PATH,
     # startup files, project cwd, inherited credentials or arbitrary probe API.
-    with subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          start_new_session=True, cwd="/", env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C"}) as process:
-        output = bytearray()
-        deadline = time.monotonic() + COMMAND_SECONDS
-        exhausted = False
-        try:
-            with selectors.DefaultSelector() as selector:
-                os.set_blocking(process.stdout.fileno(), False)
-                selector.register(process.stdout, selectors.EVENT_READ)
-                while selector.get_map():
-                    if time.monotonic() >= deadline:
-                        raise Fault("observation_timeout", "The fixed OS reader exceeded its deadline.")
-                    for key, _ in selector.select(0.05):
-                        chunk = os.read(key.fd, min(8192, MAX_SOURCE_BYTES + 1 - len(output)))
-                        if not chunk:
-                            selector.unregister(key.fileobj)
-                        output.extend(chunk)
-                        if len(output) > MAX_SOURCE_BYTES:
-                            raise Fault("observation_limit", "The fixed OS reader exceeded its output budget.")
-            exhausted = True
-            if process.wait(timeout=max(0.001, deadline - time.monotonic())):
-                raise Fault("source_unavailable", "The fixed OS reader did not succeed.")
-        except subprocess.TimeoutExpired as error:
-            raise Fault("observation_timeout", "The fixed OS reader did not exit within its deadline.") from error
-        finally:
-            if process.poll() is None or not exhausted:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            process.wait()
+    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               start_new_session=True, cwd="/", env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C"})
+    output = bytearray()
+    deadline = time.monotonic() + COMMAND_SECONDS
+    exhausted = False
+    try:
+        with selectors.DefaultSelector() as selector:
+            os.set_blocking(process.stdout.fileno(), False)
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while selector.get_map():
+                if time.monotonic() >= deadline:
+                    raise Fault("observation_timeout", "The fixed OS reader exceeded its deadline.")
+                for key, _ in selector.select(0.05):
+                    chunk = os.read(key.fd, min(8192, MAX_SOURCE_BYTES + 1 - len(output)))
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                    output.extend(chunk)
+                    if len(output) > MAX_SOURCE_BYTES:
+                        raise Fault("observation_limit", "The fixed OS reader exceeded its output budget.")
+        exhausted = True
+        if process.wait(timeout=max(0.001, deadline - time.monotonic())):
+            raise Fault("source_unavailable", "The fixed OS reader did not succeed.")
+    except subprocess.TimeoutExpired as error:
+        raise Fault("observation_timeout", "The fixed OS reader did not exit within its deadline.") from error
+    finally:
+        # Cleanup never replaces the original fault and never outlasts a short grace period: a reader the
+        # server may not signal (EPERM) is left to exit on its own once its output pipe is closed.
+        process.stdout.close()
+        if process.poll() is None or not exhausted:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=CLEANUP_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
     return output.decode("utf-8")
 
 

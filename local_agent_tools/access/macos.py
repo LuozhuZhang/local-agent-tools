@@ -69,9 +69,13 @@ def user_temp() -> Path:
     return Path(os.confstr(65537)).resolve(strict=True)
 
 
+def private_root() -> Path:
+    return user_temp() / "local-agent-tools-scope"
+
+
 def private_directory(state: Path, execution_id: str) -> Path:
     """Execution IDs are unique only within one state directory, so each state has its own namespace."""
-    return user_temp() / "local-agent-tools-scope" / hashlib.sha256(str(state).encode()).hexdigest()[:16] / execution_id
+    return private_root() / hashlib.sha256(str(state).encode()).hexdigest()[:16] / execution_id
 
 
 def account_home() -> Path:
@@ -179,8 +183,8 @@ def profile(*, readable: list[Path], writable: list[Path], private: Path, contro
         '(allow file-read* file-write* (subpath "/dev/fd"))',
         '(allow file-read* file-write* (require-all (regex #"^/dev/ttys[0-9]+$") (extension "com.apple.sandbox.pty")))',
         '(allow file-ioctl (regex #"^/dev/ttys[0-9]+$"))',
-        # Default-denied areas, plus other scoped executions' private homes.
-        f"(deny file-read* process-exec {_filters('subpath', [*denied, private.parent])})",
+        # Default-denied areas, plus every other scoped execution's private home, in any state directory.
+        f"(deny file-read* process-exec {_filters('subpath', [*denied, private_root()])})",
         f"(allow file-read-metadata {_filters('literal', denied)})",
     ]
     if exceptions:
@@ -256,11 +260,15 @@ def environment(base: dict, private: Path) -> dict:
                    "npm_config_cache": str(private / "cache" / "npm")}
 
 
-def prepare(private: Path, identity: dict[str, str]) -> None:
-    """Create the private home/temp tree and a Git config holding only the user's identity."""
+def claim(private: Path) -> None:
+    """Create this execution's private directory; an existing one belongs to someone else (FileExistsError)."""
     private.parent.parent.mkdir(mode=0o700, exist_ok=True)
     private.parent.mkdir(mode=0o700, exist_ok=True)
     private.mkdir(mode=0o700)
+
+
+def prepare(private: Path, identity: dict[str, str]) -> None:
+    """Create the private home/temp tree, inside a claimed directory, and a Git config holding only the user's identity."""
     for name in ("home", "tmp", "cache", "config", "data", "state"):
         (private / name).mkdir(mode=0o700)
     lines = [f"\t{key} = {value}" for key, value in identity.items()
