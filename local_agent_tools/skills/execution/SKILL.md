@@ -35,10 +35,12 @@ root; internal `cd` does not change that binding. See [Tasks](../tasks/SKILL.md)
 A call that carries `operation_scope` is scoped.
 Its command and every descendant then run inside the macOS Seatbelt profile shown
 in the result's `scope`. They may read the machine except credentials, `~/Library`
-(other than `~/Library/Developer`), Pictures, Music, Movies, `/Volumes` and the
-server's state and default configuration directory, nor the contents of secret-named files (`.env*`, `*.key`, `*.p12`,
-`credentials*`, `id_rsa`, `.aws`/`.ssh` folders and similar) outside selected
-roots; a selected root re-allows reading inside those areas. They may write
+(other than `~/Library/Developer`), Pictures, Music, Movies and `/Volumes`, nor
+the contents of secret-named files (`.env*`, `*.key`, `*.p12`, `credentials*`,
+`id_rsa`, `.aws`/`.ssh` folders and similar) outside selected roots; a selected
+root re-allows reading inside those areas. The server's state, its default
+configuration directory and other executions' private homes stay unreachable
+whatever the roots. They may write
 only Full roots, their registered worktrees and a private per-execution `HOME`,
 `TMPDIR` and caches. `cwd` may be any readable directory. Git
 hooks/config/`commondir`, `.vscode`/`.idea`, agent sockets and other terminals stay

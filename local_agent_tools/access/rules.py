@@ -89,9 +89,10 @@ class Scope:
     denied: tuple[Path, ...]
     exceptions: tuple[Path, ...]
     home: Path
+    hidden: tuple[Path, ...] = ()  # Other executions' private homes: never readable or writable.
 
     def _controlled(self, path: Path) -> bool:
-        return any(path == item or path.is_relative_to(item) for item in self.control)
+        return any(_inside_any_case(path, item) for item in (*self.control, *self.hidden))
 
     def _owner(self, path: Path) -> Root | None:
         """The deepest selected root containing path."""
@@ -207,6 +208,13 @@ def _inside(path: Path, other: Path) -> bool:
     return path == other or path.is_relative_to(other)
 
 
+def _inside_any_case(path: Path, other: Path) -> bool:
+    """For refusals: macOS volumes and its sandbox usually ignore case, so /Users and /users are one place."""
+    if sys.platform == "darwin":
+        path, other = Path(str(path).casefold()), Path(str(other).casefold())
+    return _inside(path, other)
+
+
 def compile(config, state: Path, machine: str, value: dict) -> Scope:
     """Validate the whole effective map and re-verify every binding before any effect."""
     try:
@@ -220,7 +228,7 @@ def compile(config, state: Path, machine: str, value: dict) -> Scope:
     home = macos.account_home()
     control = control_paths(state)
     # A root around or inside the private root would re-allow other executions' private homes.
-    private = [Path(os.path.realpath(macos.private_root()))] if sys.platform == "darwin" else []
+    private = (macos.private_root(),) if sys.platform == "darwin" else ()
     roots = []
     for item in model.roots:
         try:
@@ -232,10 +240,10 @@ def compile(config, state: Path, machine: str, value: dict) -> Scope:
         except (Fault, OSError, RuntimeError) as error:
             raise Fault("scope_target_changed", "A selected directory is missing, replaced or changed; "
                         "the owner must select it again.", effect="known_no_effect") from error
-        if path == Path("/") or _inside(home, path):
+        if path == Path("/") or _inside_any_case(home, path):
             raise Fault("scope_too_broad", "Use device Read Only or Full Access for / or the account home.",
                         effect="known_no_effect")
-        if any(_inside(path, item) or _inside(item, path) for item in (*control, *private)):
+        if any(_inside_any_case(path, item) or _inside_any_case(item, path) for item in (*control, *private)):
             raise Fault("scope_conflict", "A selected directory overlaps server configuration, state or private homes.",
                         effect="known_no_effect")
         roots.append(Root(path, item.mode, item.target_id, (info.st_dev, info.st_ino)))
@@ -249,4 +257,4 @@ def compile(config, state: Path, machine: str, value: dict) -> Scope:
                 raise Fault("scope_conflict", "A Read-only directory inside a Full directory cannot restrict it; "
                             "narrow the Full selection instead.", effect="known_no_effect")
     denied, exceptions = macos.read_denials(home)
-    return Scope(model.authority.model_dump(), tuple(roots), control, tuple(denied), tuple(exceptions), home)
+    return Scope(model.authority.model_dump(), tuple(roots), control, tuple(denied), tuple(exceptions), home, private)

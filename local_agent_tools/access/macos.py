@@ -238,6 +238,9 @@ def profile(*, readable: list[Path], writable: list[Path], private: Path, contro
         existing = _directories(common / "worktrees")
         if existing:
             lines.append(f"(deny {WRITES} {_filters('subpath', existing)})")
+    # Last, so no selected root, whatever its spelling, re-allows another execution's private home.
+    lines.append(f"(deny file-read* file-read-data {WRITES} process-exec (require-all {_filters('subpath', [private_root()])} "
+                 f"(require-not {_filters('subpath', [private])})))")
     lines.append(f"(deny file-read* file-read-data {WRITES} process-exec {_filters('subpath', control)})")
     return "\n".join(lines) + "\n"
 
