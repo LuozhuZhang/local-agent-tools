@@ -25,8 +25,8 @@ Use `requirements.lock` as the complete dependency source. Workers use the
 installed package, never a source-checkout import.
 
 The Task database needs SQLite 3.51.3 or newer, or the patched 3.50.7+ (3.50.x)
-or 3.44.6+ (3.44.x) releases. The first Task call creates it. With an older
-SQLite, Task tools fail with `task_sqlite_unsupported`; once the database exists,
+or 3.44.6+ (3.44.x) releases. The first `create_task` or `save_task` creates it. With an older
+SQLite, Task writes fail with `task_sqlite_unsupported`; once the database exists,
 file writes, commands and worktree creation fail the same way because they check
 it for Task reservations. Reads work with any SQLite.
 

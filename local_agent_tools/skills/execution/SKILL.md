@@ -32,7 +32,7 @@ root; internal `cd` does not change that binding. See [Tasks](../tasks/SKILL.md)
 
 ## Operation scope
 
-A Selected Projects call carries `operation_scope`.
+A call that carries `operation_scope` is scoped.
 Its command and every descendant then run inside the macOS Seatbelt profile shown
 in the result's `scope`. They may read the machine except credentials, `~/Library`
 (other than `~/Library/Developer`), Pictures, Music, Movies, `/Volumes` and the
@@ -48,7 +48,7 @@ worktree add` and submodule setup fail, so create worktrees with `create_worktre
 The network is not restricted.
 `EPERM` ("Operation not permitted") on a denied area, a write outside Full roots or
 a protected file is a scope denial and names no path (`denials=not_observable`).
-Never retry it without scope or through another tool; only an owner grant
-change widens it. Typed tools apply the same areas. A new worktree goes beside its
+Never retry it without scope or through another tool; only a wider
+`operation_scope` from the client widens it. Typed tools apply the same areas. A new worktree goes beside its
 repository, in a `.worktrees` folder there or inside a selected folder, and its name
 cannot start with `.`. Unsupported platforms refuse scoped launch before it starts.

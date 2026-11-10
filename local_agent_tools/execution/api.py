@@ -206,7 +206,7 @@ def _sandbox(scope: dict, state: Path, execution_id: str, working: Path,
             and any(_inside(working, path) for path in denied) and not any(_inside(working, path) for path in exceptions)):
         raise Fault("path_out_of_scope", "Scoped commands cannot start in a protected or server state directory.",
                     effect="known_no_effect")
-    private = seatbelt.private_directory(execution_id)
+    private = seatbelt.private_directory(state, execution_id)
     text = seatbelt.profile(readable=readable, writable=writable, private=private, control=control,
                             denied=denied, exceptions=exceptions, checkout=checkout)
     effective = {"roots": scope["roots"], "worktrees": trees, "destination": scope["destination"]}

@@ -186,6 +186,7 @@ def worker(directory: Path, worker_fd: int, *owned_fds: int) -> None:
                 del os.environ[name]
     original_worktree = record["context"]["worktree"]
     process = None
+    foreign_private = False
     interrupted = False
     preparation_deadline = time.monotonic() + PREPARE_SECONDS
 
@@ -232,6 +233,9 @@ def worker(directory: Path, worker_fd: int, *owned_fds: int) -> None:
                                            terminal_size=request["terminal_size"], deadline=preparation_deadline,
                                            sandbox=sandbox, env=environment)
                         except (OSError, ValueError, Fault, subprocess.SubprocessError) as error:
+                            # A private directory that already existed belongs to someone else: never remove it.
+                            foreign_private = (isinstance(error, FileExistsError) and record.get("scope") is not None
+                                               and error.filename == record["scope"]["private"])
                             record["error"] = ("launch_unverified" if process.launch_uncertain else
                                                error.code if isinstance(error, Fault) else type(error).__name__)
                         if process.pid is not None:
@@ -271,7 +275,8 @@ def worker(directory: Path, worker_fd: int, *owned_fds: int) -> None:
         record["control_ready"] = False
         if process is not None:
             process.close()
-        _remove_private(record)
+        if not foreign_private:
+            _remove_private(record)
     # Readers cannot observe the lease-release/publication gap as a lost worker.
     with lease(directory / "control.lock", wait=True, create=False):
         for fd in (*owned_fds, worker_fd):

@@ -69,8 +69,9 @@ def user_temp() -> Path:
     return Path(os.confstr(65537)).resolve(strict=True)
 
 
-def private_directory(execution_id: str) -> Path:
-    return user_temp() / "local-agent-tools-scope" / execution_id
+def private_directory(state: Path, execution_id: str) -> Path:
+    """Execution IDs are unique only within one state directory, so each state has its own namespace."""
+    return user_temp() / "local-agent-tools-scope" / hashlib.sha256(str(state).encode()).hexdigest()[:16] / execution_id
 
 
 def account_home() -> Path:
@@ -257,6 +258,7 @@ def environment(base: dict, private: Path) -> dict:
 
 def prepare(private: Path, identity: dict[str, str]) -> None:
     """Create the private home/temp tree and a Git config holding only the user's identity."""
+    private.parent.parent.mkdir(mode=0o700, exist_ok=True)
     private.parent.mkdir(mode=0o700, exist_ok=True)
     private.mkdir(mode=0o700)
     for name in ("home", "tmp", "cache", "config", "data", "state"):

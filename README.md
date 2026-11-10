@@ -20,8 +20,8 @@ python3 -m venv .venv
 Tasks are stored in SQLite and need SQLite 3.51.3 or newer, or a patched 3.50.7+
 or 3.44.6+ release. Check the interpreter the server runs on with
 `.venv/bin/python -c 'import sqlite3; print(sqlite3.sqlite_version)'`;
-the python.org 3.12 and 3.13 installers ship older versions. The first Task call
-creates the Task database. With an older SQLite, Task tools fail with
+the python.org 3.12 and 3.13 installers ship older versions. The first `create_task`
+or `save_task` creates the Task database. With an older SQLite, Task writes fail with
 `task_sqlite_unsupported`, and once a Task database exists so do file writes,
 commands and worktree creation, which check it for Task reservations. Reads work
 with any SQLite.
