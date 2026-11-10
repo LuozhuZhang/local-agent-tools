@@ -15,7 +15,7 @@ from local_agent_tools.foundation.state import lease
 
 from . import control as controls, logs
 from .logs import MAX_READ
-from .records import TERMINAL, effective_request, read_record, record_directory
+from .records import TERMINAL, read_record, record_directory
 
 if TYPE_CHECKING:
     from local_agent_tools.config import Settings
@@ -32,7 +32,7 @@ def receipt(directory: Path, machine: str, *, wait: bool = True, deadline: float
         if (directory / "control.lock").exists():
             stack.enter_context(lease(directory / "control.lock", shared=True, wait=wait, create=False))
         record = read_record(directory)
-        if record.get("format_version", 1) >= 2 and not (directory / "control.lock").is_file():
+        if not (directory / "control.lock").is_file():
             raise Fault("corrupt_state", "Execution control state is missing; preserve the original record.")
         if record["request"]["machine"] != machine:
             raise Fault("context_mismatch", "Use the original machine identity for this execution.")
@@ -62,24 +62,21 @@ def validate_read(offset: int, max_bytes: int, wait_seconds: float) -> None:
 def _snapshot(directory: Path, machine: str, execution_id: str, offset: int, max_bytes: int,
               deadline: float, cancelled: threading.Event) -> dict:
     record, status = receipt(directory, machine, wait=False, deadline=deadline, cancelled=cancelled)
-    output = logs.read(directory, offset, max_bytes, legacy=record.get("format_version", 1) == 1, wait=False)
+    output = logs.read(directory, offset, max_bytes, wait=False)
     return {"execution_id": execution_id, "machine": machine, "status": status,
             "exit_code": record["exit_code"], "context": record["context"], "version": record["version"],
             "created_at": record["created_at"], "finished_at": record.get("finished_at"),
-            "task_id": record["request"].get("task_id", ""),
-            "format_version": record.get("format_version", 1), "io_mode": record.get("io_mode", "pipe"),
-            "command": record.get("command") if record.get("format_version", 1) >= 4 else None,
-            "stop": record.get("stop") if record.get("format_version", 1) >= 4 else None,
-            "cleanup": record.get("cleanup") if record.get("format_version", 1) >= 4 else None,
+            "task_id": record["request"]["task_id"],
+            "format_version": record["format_version"], "io_mode": record["io_mode"],
+            "command": record["command"], "stop": record["stop"], "cleanup": record["cleanup"],
             "observed_at": time.time(), "control": controls.observed(record, status),
             "control_ready": bool(record.get("control_ready") and status == "running" and not record.get("error")),
-            "control_actions": ([] if record.get("control") is None else
-                                ["write_stdin", "interrupt", "resize"] if record.get("io_mode") == "pty" else ["interrupt"]),
-            "terminal_size": record.get("terminal_size"),
-            "termination_grace_seconds": effective_request(record)["termination_grace_seconds"],
-            "workspace_access": record["request"].get("workspace_access", "exclusive"),
-            "resource_keys": record["request"].get("resource_keys", []),
-            # Legacy receipts were unrestricted; they never acquire scope from today's policy.
+            "control_actions": ([] if record["control"] is None else
+                                ["write_stdin", "interrupt", "resize"] if record["io_mode"] == "pty" else ["interrupt"]),
+            "terminal_size": record["terminal_size"],
+            "termination_grace_seconds": record["request"]["termination_grace_seconds"],
+            "workspace_access": record["request"]["workspace_access"],
+            "resource_keys": record["request"]["resource_keys"],
             "scope": record.get("scope"),
             "cancel_requested": (directory / "cancel.request").is_file(),
             "error": record.get("error"), **output,

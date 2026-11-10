@@ -81,5 +81,4 @@ Original receipts remain historical; new acceptance needs current-plan evidence.
 File selectors and command `cwd` must match the revised target. Unresolved local
 effects still block plan replacement; another tree cannot abandon unknown work.
 Independent tasks retain existing operation locks without a global checkout-owner
-ledger. Older strict readers reject unsupported selectors instead of silently
-writing the default root.
+ledger.

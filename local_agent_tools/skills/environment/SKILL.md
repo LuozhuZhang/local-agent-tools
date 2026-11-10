@@ -56,8 +56,7 @@ or proof an external prerequisite is still missing. Follow the original evidence
 and compare current source/CI results before applying the
 [parallel-work decision rule](../overview/SKILL.md#choose-work-from-current-evidence).
 The operation-page `limit` does not truncate stages; the 64 KiB response cap still
-applies. Older runtimes may omit `stages`; use the original `read_task` summary,
-not invented dependencies.
+applies.
 
 ## Act using the original owners
 

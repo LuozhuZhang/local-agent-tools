@@ -19,7 +19,7 @@ METHODS = FILE_METHODS | EXECUTION_METHODS | {"control_execution", "cancel_execu
 # else is unknown unless an original receipt proves its outcome.
 NO_EFFECT = {"execution_disabled", "workspace_write_disabled", "invalid_command", "invalid_timeout",
              "invalid_access", "invalid_resources", "invalid_head", "invalid_cwd", "context_mismatch",
-             "context_unavailable", "path_denied", "legacy_workspace_busy", "ambiguous_workspace"}
+             "context_unavailable", "path_denied", "workspace_lease_busy", "ambiguous_workspace"}
 
 
 def _context(view: dict, operation_id: str) -> dict:

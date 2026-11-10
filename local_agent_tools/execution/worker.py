@@ -17,7 +17,7 @@ from local_agent_tools.access import macos as seatbelt
 from . import control, logs
 from .logs import MAX_BYTES as MAX_LOG, MAX_READ
 from .process import Process, boot_identity
-from .records import CREATION_FORMAT, FORMAT, STOP_STATUS, read_record
+from .records import STOP_STATUS, read_record
 
 PREPARE_SECONDS = 15
 FORCE_SECONDS = 2
@@ -177,8 +177,6 @@ def worker(directory: Path, worker_fd: int, *owned_fds: int) -> None:
     # The command inherits workspace/resource leases, never the worker's identity lease.
     os.set_inheritable(worker_fd, False)
     record = read_record(directory)
-    if record.get("format_version") not in (FORMAT, CREATION_FORMAT):
-        raise Fault("unsupported_state_version", "Only the original runtime may start a legacy worker.")
     request = record["request"]
     creation_plan = record["context"].get("creation_plan")
     if creation_plan is not None:

@@ -15,7 +15,7 @@ not itself cancel an original command or replace its interpreter/archive.
 
 Timeout defaults to 600 seconds; explicit requests allow up to 86,400 seconds.
 Grace is null or a finite 0..30 seconds: null means five seconds for new work and
-the original value on retry, including legacy 0.5 seconds. Default pipes have
+the original value on retry. Default pipes have
 closed stdin and combined stdout/stderr. Exclusive canonical-workspace leases
 remain default; `shared` is only a cooperating read-only declaration, not enforced
 isolation. Up to 16 stable named resources coordinate across workspaces.
@@ -61,7 +61,7 @@ It appends hash-bound `reconciliation.json` evidence and preserves `record.json`
 byte-for-byte. Subsequent ordinary reads and Task observation use that evidence;
 repeating the same ID after a missing reply returns the original recovery.
 
-Historical receipts without the native identity, a changed boot, unknown exit,
+Receipts without the native identity, a changed boot, unknown exit,
 live members, lost ownership or failed result verification remain unresolved.
 Do not infer cleanup from an empty output, exit zero, a clean checkout, or a free
 lock alone. Reads never perform or persist this recovery.
@@ -69,8 +69,6 @@ lock alone. Reads never perform or persist this recovery.
 Output rotates through four 1 MiB segments without killing commands. Absolute raw
 byte cursors survive rotation; expired data reports `output_gap` and the oldest
 retained offset. Keep full output in explicit producer artifacts, not this cache.
-Formats 1..5 and legacy prefix logs remain readable without rewriting; absent
-historical facts stay null and old workers retain their original capabilities.
 
 ### Find and observe executions
 
@@ -120,7 +118,7 @@ overflow is an error, not a silently incomplete success.
 are integer rows/cols 1..1000, default 24x80. Pipe mode rejects dimensions.
 Initial mode/size are immutable start identity; resize changes current size only.
 PTY failure has no pipe fallback. Read `control_ready`, supported actions, current
-sequence and last receipt before control. Old workers are not adopted. Overlong
+sequence and last receipt before control. Overlong
 control paths reject PTY before launch; pipes may report controls unavailable.
 
 Controls require the observed sequence (0..2^53-2) and one action: `write_stdin`

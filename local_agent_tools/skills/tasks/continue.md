@@ -44,7 +44,6 @@ history is separate, not absent. Use `section: operations` with the original
 (default 20, maximum 50 entries). Follow a stage's `evidence_ref` to its immutable
 decision version. Operation pages require an unchanged task revision; history
 cursors keep their original watermark. Never infer no unknowns from one page.
-Migration-era legacy summaries remain complete original bounded records.
 
 ## Original-result observation
 

@@ -15,7 +15,6 @@ MAX_TIMEOUT = 86400
 FORMAT = 5
 CREATION_FORMAT = 6
 DEFAULT_GRACE = 5.0
-LEGACY_GRACE = 0.5
 CONTROL_PROTOCOL = 1
 MAX_CONTROL_SEQ = 2**53 - 1
 MAX_INPUT = 16384
@@ -87,19 +86,13 @@ def control_fingerprint(request: dict) -> str:
                                      separators=(",", ":")).encode()).hexdigest()
 
 
-def effective_request(record: dict) -> dict:
-    """Legacy omission means its original behavior, never a new writer's default."""
-    return {"workspace_access": "exclusive", "resource_keys": [], "task_id": "",
-            "termination_grace_seconds": LEGACY_GRACE, "tty": False, "terminal_size": None,
-            **record["request"]}
 
 
 
 
 def _validate_facts(record: dict) -> None:
     command, stop, cleanup = record["command"], record["stop"], record["cleanup"]
-    modes = {"pipe", "pty"} if record["format_version"] >= FORMAT else {"pipe"}
-    if record["io_mode"] not in modes:
+    if record["io_mode"] not in {"pipe", "pty"}:
         raise ValueError("unsupported IO mode")
     grace = record["request"]["termination_grace_seconds"]
     if (not _number(grace) or not 0 <= grace <= 30 or not _number(stop["grace_seconds"])
@@ -237,7 +230,7 @@ def require_reconcilable(record: dict) -> None:
     """Recovery can prove cleanup only with retained native identity in the same boot."""
     require_cleanup_only_unknown(record)
     if "session_id" not in record["cleanup"] or "boot_id" not in record["cleanup"]:
-        raise Fault("cleanup_identity_unavailable", "This historical receipt has no native session identity; preserve its unknown outcome.")
+        raise Fault("cleanup_identity_unavailable", "This receipt has no native session identity; preserve its unknown outcome.")
 
 
 def reconciled_record(record: dict, evidence: dict, receipt_sha256: str, execution_id: str) -> dict:
@@ -272,7 +265,6 @@ def _validate_scope(record: dict) -> None:
     if (not isinstance(scope, dict) or set(scope) != SCOPE_KEYS or scope["protocol"] != 1
             or not isinstance(text, str) or hashlib.sha256(text.encode()).hexdigest() != scope["profile_sha256"]
             or not isinstance(scope["roots"], list) or not scope["roots"] or not isinstance(scope["worktrees"], list)
-            or record["format_version"] < FORMAT
             or record.get("private_cleanup", "verified") not in {"verified", "failed"}):
         raise ValueError("invalid operation scope receipt")
 
@@ -280,12 +272,10 @@ def _validate_scope(record: dict) -> None:
 def validate_record(record: dict, execution_id: str) -> None:
     """Validate retained format and identity without IO or live process observation."""
     try:
-        version = record.get("format_version", 1)
-        if type(version) is not int or version not in (1, 2, 4, FORMAT, CREATION_FORMAT):
+        version = record.get("format_version")
+        if type(version) is not int or version not in (FORMAT, CREATION_FORMAT):
             raise Fault("unsupported_state_version", "This runtime cannot read the execution receipt version.")
-        states = TERMINAL | {"accepted", "preparing", "running", "stopping", "finishing"} if version >= 4 else (
-            TERMINAL - {"outcome_unknown"}) | {"accepted", "preparing", "running"}
-        if record["status"] not in states:
+        if record["status"] not in TERMINAL | {"accepted", "preparing", "running", "stopping", "finishing"}:
             raise ValueError("invalid state")
         code = record["exit_code"]
         if code is not None and type(code) is not int:
@@ -312,13 +302,11 @@ def validate_record(record: dict, execution_id: str) -> None:
             raise ValueError("invalid receipt metadata")
         if record["status"] in TERMINAL and not _number(record["finished_at"]):
             raise ValueError("missing terminal receipt")
-        if version >= 4:
-            _validate_facts(record)
-        if version >= FORMAT:
-            try:
-                _validate_interactive(record)
-            except Fault as error:
-                raise ValueError("invalid interactive receipt") from error
+        _validate_facts(record)
+        try:
+            _validate_interactive(record)
+        except Fault as error:
+            raise ValueError("invalid interactive receipt") from error
         if "scope" in record or "sandbox_profile" in record:
             _validate_scope(record)
         if version == CREATION_FORMAT:

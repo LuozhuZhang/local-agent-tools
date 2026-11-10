@@ -395,7 +395,7 @@ class Current(Model):
 
 
 class Record(Current):
-    """Exact historical decoder, also used by disposable compatibility fixtures."""
+    """The complete Task record: current state plus its operations and history."""
 
     operations: Annotated[list[Operation], Field(max_length=64)]
     history: Annotated[list[History], Field(max_length=64)]

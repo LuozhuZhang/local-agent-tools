@@ -16,7 +16,7 @@ receipts remain authoritative. A record or read never creates execution authorit
 | Observe original results and bounded observer errors | [Continue](continue.md#original-result-observation) |
 | Pause/cancel/resume or revise scope | [Control](control.md) |
 | Accept stage evidence and explicitly finish | [Verify](verify.md) |
-| Repair derived lookup or continue legacy checkpoints | [Maintenance](maintenance.md) |
+| Continue legacy checkpoints | [Maintenance](maintenance.md) |
 
 Inspect current schemas before claiming support. Missing tools do not authorize
 installation, dropping `task_context`, or replacing a required structured task with

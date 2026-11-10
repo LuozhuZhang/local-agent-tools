@@ -23,7 +23,7 @@ from local_agent_tools.access import macos as seatbelt
 from . import control as controls, observation
 from .process import boot_identity, session_members, supported
 from .records import (CONTROL_PROTOCOL, CREATION_FORMAT, FORMAT, MAX_TIMEOUT, TERMINAL, control_request,
-                      effective_request, read_record, reconciled_record, record_directory,
+                      read_record, reconciled_record, record_directory,
                       require_reconcilable,
                       resolve_terminal_size, termination_grace)
 
@@ -83,7 +83,7 @@ def start(config: "Settings", state: Path, machine: str, execution_id: str, cwd:
                "tty": tty, "terminal_size": resolve_terminal_size(tty, terminal_size)}
     with lease(locks / f"{execution_id}.lock"):
         if directory.exists():
-            original = effective_request(read_record(directory))
+            original = read_record(directory)["request"]
             if termination_grace_seconds is None:
                 request["termination_grace_seconds"] = original["termination_grace_seconds"]
             if original != request:
@@ -334,7 +334,7 @@ def _admit(config: "Settings", state: Path, machine: str, execution_id: str,
                 raise Fault("worker_launch_failed", "The worker could not start; inspect this execution ID.") from error
 
 
-def check_workspace_leases(config, state: Path, *, legacy_candidate: bool = False, scope: Path | None = None) -> None:
+def check_workspace_leases(config, state: Path, *, scope: Path | None = None) -> None:
     """Verify non-Git lease mapping in either direction without replacing a lock."""
     root = state / "executions"
     if not root.exists():
@@ -347,11 +347,11 @@ def check_workspace_leases(config, state: Path, *, legacy_candidate: bool = Fals
         if observed.get("git_status") != "not_a_worktree":
             continue
         cwd = Path(record["request"]["cwd"])
-        original = observed.get("workspace_lock_root", observed["worktree"])
+        original = observed["workspace_lock_root"]
         if whole_device_writes(config):
             # The global lease must not bypass any retained configured-root writer,
-            # even when its historical root was later removed from configuration.
-            selected = observed["worktree"] if legacy_candidate else "/"
+            # even when its root was later removed from configuration.
+            selected = "/"
         elif original == "/":
             # A prior whole-device writer can outlive its grant downgrade.
             selected = None
@@ -366,12 +366,12 @@ def check_workspace_leases(config, state: Path, *, legacy_candidate: bool = Fals
             ):
                 continue
             try:
-                selected = observed["worktree"] if legacy_candidate else lock_root(config, related[0].machine, cwd, observed)
+                selected = lock_root(config, related[0].machine, cwd, observed)
             except Fault as error:
                 if error.code != "ambiguous_workspace":
                     raise
-                # Historical roots need not admit new work, but their old lease
-                # must be verifiably free before changing the lock domain.
+                # A root removed from configuration admits no new work, but its
+                # lease must be verifiably free before changing the lock domain.
                 selected = None
         if selected == original:
             continue
@@ -380,7 +380,7 @@ def check_workspace_leases(config, state: Path, *, legacy_candidate: bool = Fals
             with lease(state / "locks" / f"workspace-{old_key}.lock", create=False):
                 pass
         except (Fault, OSError) as error:
-            raise Fault("legacy_workspace_busy", "An original non-Git cwd lease is busy or unavailable; let its owner finish before changing the lock domain.") from error
+            raise Fault("workspace_lease_busy", "A non-Git writer lease from before a configuration change is busy or unavailable; let its owner finish first.") from error
 
 
 def reconcile(config: "Settings", state: Path, machine: str, execution_id: str) -> dict:
@@ -403,7 +403,7 @@ def reconcile(config: "Settings", state: Path, machine: str, execution_id: str) 
             require_reconcilable(record)
             if boot_identity() != record["cleanup"]["boot_id"]:
                 raise Fault("cleanup_identity_unavailable", "The original native boot identity is no longer available.")
-            root = record["context"].get("workspace_lock_root", record["context"]["worktree"])
+            root = record["context"]["workspace_lock_root"]
             targets = [Path(root)]
             if record["format_version"] == CREATION_FORMAT:
                 targets.append(Path(record["context"]["creation_plan"]["source_root"]))
@@ -450,8 +450,6 @@ def cancel(config: "Settings", state: Path, machine: str, execution_id: str) -> 
         raise Fault("outcome_unknown", "Worker ownership is unverified; cancellation cannot claim termination.")
     if status in TERMINAL:
         return observation.read(config, state, machine, execution_id)
-    if record.get("format_version", 1) < 2:
-        raise Fault("unsupported_operation", "This legacy worker does not support cancellation; preserve its runtime.")
     with lease(directory / "control.lock", wait=True, create=False):
         # Only the worker publishes execution status. A repeated request is a no-op.
         record = read_record(directory)
