@@ -1,0 +1,628 @@
+"""Transactional current Task state and indexed original evidence."""
+
+from collections.abc import Callable
+from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
+import re
+import sqlite3
+import time
+
+from local_agent_tools.foundation.sanitize import Fault, redact
+from . import database as db, effects, records
+from .rows import (append_event, decode_operation, insert_record, operation_key, pack_current,
+                   put_legacy, put_operation, read_current, read_decision, record_core, task_row, validate_operation)
+from .index import INDEX_PAGE, MAX_CHECKPOINT, metadata as validate_metadata, task_id
+
+
+def _check_writer(connection, target: dict, identity: str | None, *, required: bool = False) -> None:
+    blockers = db.writer_rows(connection, target, foreign_to=identity or "")
+    if blockers:
+        raise Fault("task_resource_conflict",
+                    "Choose another worktree or reconcile and safely complete the original Task.",
+                    {"canonical_root": target["root"], "blocking_task_ids": sorted({row["task_id"] for row in blockers[:64]}),
+                     "reason": "active_reservation", "blockers_truncated": len(blockers) > 64}, effect="known_no_effect")
+    same = connection.execute(
+        "SELECT * FROM writer_reservations WHERE task_id=? AND (root=? OR (device=? AND inode=?))",
+        (identity, target["root"], target["device"], target["inode"])).fetchall()
+    if any(row["root"] == target["root"] and
+           (row["device"], row["inode"]) != (target["device"], target["inode"]) for row in same):
+        raise Fault("context_mismatch", "The reserved root was replaced; retain its original Task and target evidence.",
+                    effect="known_no_effect")
+    if required and not same:
+        raise Fault("task_resource_unverified", "The original Task reservation is missing; do not dispatch or replay work.",
+                    effect="known_no_effect")
+
+
+def check_writer(state: Path, target: dict, identity: str | None = None, *, required: bool = False) -> None:
+    with db.connect(state) as connection:
+        if connection is None:
+            if required:
+                raise Fault("task_resource_unverified", "The original Task reservation is missing; do not dispatch or replay work.",
+                            effect="known_no_effect")
+            return
+        _check_writer(connection, target, identity, required=required)
+
+
+def writer_reservations(state: Path, identity: str) -> list[dict]:
+    """Bounded original physical roots for explicit plan revision only."""
+    with db.connect(state) as connection:
+        rows = connection.execute(
+            "SELECT root,device,inode FROM writer_reservations WHERE task_id=? LIMIT 65", (identity,)).fetchall()
+        if len(rows) > 64:
+            raise Fault("task_resource_unverified", "Too many original writer roots for bounded plan revision.")
+        return [dict(row) for row in rows]
+
+
+def _observation_support() -> dict:
+    return {"support": {"structured_records": True, "supervised_admission": True,
+                        "runtime_recovery": False, "events_delivery": False},
+            "observations": [{"kind": "caller", "state": "unknown", "source": "not_observed",
+                "observed_at_ms": None, "last_progress_at_ms": None, "next_attempt_at_ms": None,
+                "blocker": "Caller continuation is not observed; native-account claims are not client presence or automatic wake."}]}
+
+
+def _selected(connection, identity: str, current: dict, operation_ids=()) -> list[dict]:
+    identities = set(operation_ids)
+    if len(identities) > 256 or any(not isinstance(key, str) or len(key) != 32 for key in identities):
+        raise Fault("invalid_range", "Use a bounded set of original operation IDs.")
+    rows = {row["id"]: row for row in connection.execute(
+        "SELECT * FROM operations WHERE task_id=? AND unresolved=1 ORDER BY ordinal", (identity,))}
+    if len(rows) > records.MAX_ACTIVE_OPERATIONS:
+        raise Fault("corrupt_tasks", "Unresolved task work exceeds its retained active-work budget.")
+    for stage in current["plan"]["stages"]:
+        row = connection.execute("SELECT * FROM operations WHERE task_id=? AND stage_id=? ORDER BY ordinal DESC LIMIT 1",
+                                  (identity, stage["id"])).fetchone()
+        if row is not None:
+            rows[row["id"]] = row
+    for key in identities - rows.keys():
+        row = connection.execute("SELECT * FROM operations WHERE task_id=? AND id=?", (identity, key)).fetchone()
+        if row is not None:
+            rows[key] = row
+    return [decode_operation(row) for row in sorted(rows.values(), key=lambda row: row["ordinal"])]
+
+
+def _facts(connection, row, current: dict, operations: list[dict]) -> dict:
+    identity = row["task_id"]
+    unresolved = [item for item in operations if effects.unresolved(item)]
+    pending = [item for item in unresolved if records.pending(item)]
+    admitted = connection.execute("SELECT admitted_at_ms FROM operations WHERE task_id=? ORDER BY admitted_at_ms DESC LIMIT 1", (identity,)).fetchone()
+    observed = connection.execute("SELECT observed_at_ms FROM operations WHERE task_id=? ORDER BY observed_at_ms DESC LIMIT 1", (identity,)).fetchone()
+    progress = max(current["created_at_ms"], admitted[0] if admitted else 0,
+                   (current["terminal"] or {}).get("finished_at_ms", 0))
+    for stage in current["plan"]["stages"]:
+        if stage["state"] == "accepted":
+            event = connection.execute("SELECT at_ms FROM task_events WHERE task_id=? AND kind='decision' AND stage_id=? ORDER BY at_ms DESC LIMIT 1",
+                                        (identity, stage["id"])).fetchone()
+            progress = max(progress, event[0] if event else 0)
+    return {"operation_count": row["operation_count"], "history_count": row["history_count"],
+            "stage_operation_counts": json.loads(row["stage_counts"]),
+            "unresolved_count": len(unresolved), "pending_count": len(pending),
+            "running_count": sum((op["result"] or {}).get("status") == "running" for op in pending),
+            "unknown_count": sum(op["state"] == "unknown" or (op["result"] or {}).get("status") == "unknown" for op in unresolved),
+            "partial_count": sum((op["result"] or {}).get("status") == "partial" for op in unresolved),
+            "last_admitted_at_ms": admitted[0] if admitted else None,
+            "last_observed_at_ms": observed[0] if observed else None, "progress_ms": progress}
+
+
+def _view(connection, identity: str, operation_ids=()) -> dict:
+    row = task_row(connection, identity)
+    current = db.decode(row["current"], row["sha256"])
+    if row["kind"] == "legacy":
+        body = current["body"]
+        return {"task_id": identity, **current, "body": redact(body), "content_redacted": redact(body) != body,
+                "generation": db.metadata(connection)["generation"], "resume_authorized": False}
+    current, versions = read_current(connection, row)
+    if current["task_id"] != identity or current["revision"] != row["revision"]:
+        raise Fault("corrupt_tasks", "Task identity or revision differs from its stored authority.")
+    operations = _selected(connection, identity, current, operation_ids)
+    facts = _facts(connection, row, current, operations)
+    current.update(operations=operations, history=[], _facts=facts, _decisions=versions)
+    return {"task_id": identity, "record": current, "facts": facts, "read_schema": 2, "record_complete": False,
+            "observed_at_ms": time.time_ns() // 1000000, "index_status": "current",
+            "generation": db.metadata(connection)["generation"], "sequence": row["change_seq"],
+            **_observation_support()}
+
+
+def read(state: Path, identity: str, *, operation_ids=()) -> dict:
+    task_id(identity)
+    with db.connect(state) as connection:
+        if connection is None:
+            raise Fault("tasks_uninitialized", "This private Task store has not been initialized.")
+        return _view(connection, identity, operation_ids)
+
+
+def operation(state: Path, identity: str, operation_id: str) -> dict | None:
+    with db.connect(state) as connection:
+        if connection is None:
+            raise Fault("tasks_uninitialized", "This private Task store has not been initialized.")
+        row = connection.execute("SELECT * FROM operations WHERE task_id=? AND id=?", (identity, operation_id)).fetchone()
+        return decode_operation(row) if row else None
+
+
+def control_update(state: Path, identity: str, update_id: str) -> dict | None:
+    with db.connect(state) as connection:
+        if connection is None:
+            raise Fault("tasks_uninitialized", "This private Task store has not been initialized.")
+        row = connection.execute("SELECT id,request_sha256 FROM task_updates WHERE task_id=? AND id=?", (identity, update_id)).fetchone()
+        return {"id": row[0], "request_sha256": row[1]} if row else None
+
+
+def create(state: Path, identity: str, update_id: str, title: str, anchors: list[str], origin: dict,
+           contract: dict, stages: list[dict], *, validate_new: Callable[[dict], None] | None = None) -> dict:
+    request = records.normalize_create({"task_id": identity, "update_id": update_id, "title": title,
+        "anchors": anchors, "origin": origin, "contract": contract, "stages": stages})
+    fingerprint = records.digest({"method": "create_task", **request})
+    try:
+        original = read(state, identity)
+    except Fault as error:
+        if error.code not in {"tasks_uninitialized", "task_not_found"}:
+            raise
+    else:
+        retained = control_update(state, identity, update_id) if "record" in original else None
+        if retained is None or retained["request_sha256"] != fingerprint:
+            raise Fault("task_conflict", "The original Task ID belongs to different retained creation intent.")
+        return {**original, "status": "unchanged"}
+    records.new_record(request, time.time_ns() // 1000000)
+    prepared = deepcopy(request)
+    if validate_new is not None:
+        validate_new(prepared)
+    record = records.new_record(prepared, time.time_ns() // 1000000)
+    record["last_update"]["request_sha256"] = fingerprint
+    with db.connect(state, write=True, initialize=True) as connection:
+        if connection.execute("SELECT 1 FROM tasks WHERE task_id=?", (identity,)).fetchone():
+            raise Fault("task_conflict", "An original Task appeared during creation; observe it before another action.")
+        db.admission_space(state)
+        insert_record(connection, record)
+        view = _view(connection, identity)
+    return {**view, "status": "created"}
+
+
+def update(state: Path, identity: str, transform: Callable[[dict, int], None], *,
+           expected_revision: int | None = None, last_update: dict | None = None,
+           expected_plan_revision: int | None = None, expected_epoch: int | None = None,
+           allow_observations: bool = False,
+           observation: bool = False, operation_ids=(), reserve_disk: bool = True,
+           writer_target: dict | None = None, retained_targets: list[dict] | None = None) -> dict:
+    """Commit bounded current state, touched rows and audit together; callbacks do no IO.
+
+    Expected plan/epoch describe a revision rejection; transforms retain their
+    existing plan/epoch guards and the store retains its original CAS ordering.
+    """
+    task_id(identity)
+    with db.connect(state, write=True) as connection:
+        if connection is None:
+            raise Fault("tasks_uninitialized", "This Task store has not been initialized.")
+        view = _view(connection, identity, operation_ids)
+        if "record" not in view:
+            raise Fault("task_conflict", "A structured transition cannot replace a legacy checkpoint.")
+        original = view["record"]
+        if last_update is not None:
+            retained = control_update(state, identity, last_update["id"])
+            if retained is not None:
+                if retained != last_update:
+                    raise Fault("task_conflict", "The retained update ID belongs to different normalized intent.")
+                return {**view, "status": "unchanged"}
+        compatible = (expected_revision is not None and allow_observations
+                      and original["control_revision"] <= expected_revision <= original["revision"])
+        if expected_revision is not None and expected_revision != original["revision"] and not compatible:
+            raise records.version_conflict(original, expected_revision, expected_plan_revision, expected_epoch)
+        value = deepcopy(original)
+        now = max(time.time_ns() // 1000000, original["updated_at_ms"])
+        transform(value, now)
+        if last_update is not None:
+            value["last_update"] = last_update
+        if value == original:
+            return {**view, "status": "unchanged"}
+        for key in ("format", "task_id", "title", "anchors", "created_at_ms", "origin"):
+            if value[key] != original[key]:
+                raise Fault("task_identity_conflict", "Original task identity and initiating request are immutable.")
+        value.update(revision=original["revision"] + 1, updated_at_ms=now)
+        material = not observation or any(value[key] != original[key] for key in ("contract", "plan", "terminal"))
+        material |= any(value["control"][key] != original["control"][key] for key in ("owner", "epoch", "stop_intent", "current_stage_id"))
+        value["control_revision"] = value["revision"] if material else original["control_revision"]
+        try:
+            core = records.Current.model_validate(record_core(value)).model_dump()
+            prior_row = task_row(connection, identity)
+            prior = db.decode(prior_row["current"], prior_row["sha256"])
+            if not connection.execute("SELECT 1 FROM task_events WHERE task_id=? AND kind='snapshot' LIMIT 1", (identity,)).fetchone():
+                append_event(connection, identity, prior, snapshot_at=now)
+            old_operations = {item["id"]: item for item in original["operations"]}
+            selected = {item["id"]: item for item in value["operations"]}
+            if len(selected) != len(value["operations"]) or not old_operations.keys() <= selected.keys():
+                raise ValueError("original selected operations cannot be removed or duplicated")
+            count = original["_facts"]["operation_count"]
+            stages = {stage["id"]: original["_facts"]["stage_operation_counts"].get(stage["id"], 0)
+                      for stage in core["plan"]["stages"]}
+            for item in value["operations"]:
+                old = old_operations.get(item["id"])
+                if item == old:
+                    continue
+                item = validate_operation(item, core)
+                if old is not None:
+                    for key in ("id", "stage_id", "plan_revision", "epoch", "request_sha256", "source_sha256", "admitted_at_ms"):
+                        if old.get(key) != item.get(key):
+                            raise Fault("task_identity_conflict", "Original operation intent is immutable.")
+                    if old["locator"] != item["locator"]:
+                        raise Fault("task_identity_conflict", "Original operation locator identity is immutable.")
+                    ordinal = connection.execute("SELECT ordinal FROM operations WHERE task_id=? AND id=?", (identity, item["id"])).fetchone()[0]
+                else:
+                    binding = operation_binding(state, operation_key(item["locator"]), item["id"])
+                    if binding is not None:
+                        if binding["task_id"] != identity or any(op["id"] == item["id"] for op in binding["operations"]):
+                            raise Fault("task_operation_conflict", "Original operation identity is already bound.")
+                    if reserve_disk:
+                        db.admission_space(state)
+                    count += 1
+                    ordinal = count
+                    stages[item["stage_id"]] = stages.get(item["stage_id"], 0) + 1
+                put_operation(connection, identity, item, ordinal)
+                append_event(connection, identity, {"kind": "operation_admitted" if old is None else "operation_observed", "at_ms": now,
+                    "stage_id": item["stage_id"], "operation_id": item["id"],
+                    "operation": item if old is None else {key: item[key] for key in ("id", "state", "observed_at_ms", "result", "locator")}})
+            if connection.execute("SELECT count(*) FROM operations WHERE task_id=? AND unresolved=1", (identity,)).fetchone()[0] > records.MAX_ACTIVE_OPERATIONS:
+                raise Fault("task_capacity", "Retain active-work capacity for original results and stopping.")
+            for stage in core["plan"]["stages"]:
+                if stage not in original["plan"]["stages"]:
+                    for key in stage["evidence"]:
+                        op = operation(state, identity, key)
+                        if op is None or op["stage_id"] != stage["id"]:
+                            raise ValueError("stage evidence lost its original operation")
+            for item in (core["terminal"] or {}).get("acceptance", []):
+                if item["operation_id"] is not None:
+                    op = operation(state, identity, item["operation_id"])
+                    if op is None or op["stage_id"] != item["stage_id"]:
+                        raise ValueError("terminal evidence differs")
+            if (core["terminal"] is not None and core["terminal"]["outcome"] != "abandoned"
+                    and any(effects.unresolved(item) for item in value["operations"])):
+                raise Fault("task_effect_unresolved", "Original live, partial or unknown effects prevent retirement.")
+            for event in value["history"]:
+                records.History.model_validate(event)
+                if not core["created_at_ms"] <= event["at_ms"] <= now:
+                    raise ValueError("material event time differs")
+                append_event(connection, identity, event)
+            packed = pack_current(connection, core, original["_decisions"])
+            changes = {key: item for key, item in packed.items() if key not in {"revision", "updated_at_ms", "control_revision", "last_update"} and item != prior.get(key)}
+            if "plan" in changes and core["plan"]["revision"] == original["plan"]["revision"]:
+                changes["plan"] = {"revision": core["plan"]["revision"], "decisions": [
+                    {key: stage[key] for key in ("id", "state", "decision_version")}
+                    for stage in packed["plan"]["stages"] if stage not in prior["plan"]["stages"]]}
+            if changes or last_update is not None:
+                append_event(connection, identity, {"kind": "control" if last_update else "state_changed", "at_ms": now, "changes": changes}, update=last_update)
+            payload, sha = db.encoded(packed)
+            connection.execute("UPDATE tasks SET revision=?,change_seq=?,current=?,sha256=?,operation_count=?,stage_counts=? WHERE task_id=?",
+                (core["revision"], db.bump(connection), payload, sha, count, json.dumps(stages), identity))
+            if writer_target is not None:
+                _check_writer(connection, writer_target, identity)
+                same_physical = connection.execute(
+                    "SELECT root FROM writer_reservations WHERE task_id=? AND device=? AND inode=?",
+                    (identity, writer_target["device"], writer_target["inode"])).fetchall()
+                if same_physical:
+                    # Refresh the pathname atomically: a later writer selecting a
+                    # child of the renamed root must still see this reservation.
+                    for row in same_physical:
+                        if row["root"] != writer_target["root"]:
+                            connection.execute("UPDATE writer_reservations SET root=? WHERE task_id=? AND root=?",
+                                               (writer_target["root"], identity, row["root"]))
+                else:
+                    connection.execute("INSERT OR IGNORE INTO writer_reservations VALUES (?,?,?,?)",
+                        (identity, writer_target["root"], writer_target["device"], writer_target["inode"]))
+            local_unresolved = connection.execute(
+                "SELECT 1 FROM operations WHERE task_id=? AND unresolved=1 AND kind IN ('execution','change') LIMIT 1",
+                (identity,)).fetchone()
+            if core["terminal"] is not None and core["terminal"]["outcome"] != "abandoned" and not local_unresolved:
+                connection.execute("DELETE FROM writer_reservations WHERE task_id=?", (identity,))
+            elif retained_targets is not None:
+                if local_unresolved:
+                    raise Fault("task_effect_unresolved", "Original local effects prevent target retirement.")
+                for row in connection.execute("SELECT root,device,inode FROM writer_reservations WHERE task_id=?", (identity,)).fetchall():
+                    root = Path(row["root"])
+                    physical = next((target for target in retained_targets
+                                     if (row["device"], row["inode"]) == (target["device"], target["inode"])), None)
+                    if physical is not None:
+                        # Rebind the retained inode to its verified canonical path
+                        # in the same transaction as the revised Task plan.
+                        if row["root"] != physical["root"]:
+                            # An unrelated Task may have reserved a descendant
+                            # after an external rename but before plan revision.
+                            # Refuse the rebind rather than creating two owners.
+                            _check_writer(connection, physical, identity)
+                            connection.execute("UPDATE writer_reservations SET root=? WHERE task_id=? AND root=?",
+                                               (physical["root"], identity, row["root"]))
+                    elif not any(root.is_relative_to(target["root"]) or Path(target["root"]).is_relative_to(root)
+                                 for target in retained_targets):
+                        if retained_targets:
+                            try:
+                                actual = root.stat()
+                                if root.is_symlink() or (actual.st_dev, actual.st_ino) != (row["device"], row["inode"]):
+                                    raise OSError("Original target identity changed")
+                            except OSError as error:
+                                raise Fault("task_resource_unverified",
+                                            "The original nested writer moved; verify its physical target before plan revision.",
+                                            effect="known_no_effect") from error
+                        connection.execute("DELETE FROM writer_reservations WHERE task_id=? AND root=?", (identity, str(root)))
+            result = _view(connection, identity, operation_ids)
+        except (ValueError, TypeError, KeyError, sqlite3.IntegrityError) as error:
+            raise Fault("invalid_task_transition", "The transaction violates current Task or original evidence constraints; no new effect was admitted.") from error
+    return {**result, "status": "saved"}
+
+
+def operation_binding(state: Path, key: tuple, operation_id: str = "") -> dict | None:
+    with db.connect(state) as connection:
+        if connection is None:
+            return None
+        encoded_key = records.canonical(key).decode()
+        owners = connection.execute("SELECT DISTINCT task_id FROM operations WHERE effect_key=? OR id=? LIMIT 2",
+                                    (encoded_key, operation_id)).fetchall()
+        if len(owners) > 1:
+            raise Fault("task_operation_conflict", "An original effect is ambiguously bound across Tasks.")
+        if not owners:
+            return None
+        identity = owners[0][0]
+        first = connection.execute("SELECT * FROM operations WHERE task_id=? AND effect_key=? ORDER BY ordinal LIMIT 1",
+                                   (identity, encoded_key)).fetchone()
+        exact = connection.execute("SELECT * FROM operations WHERE task_id=? AND id=?", (identity, operation_id)).fetchone()
+        rows = {row["id"]: row for row in (first, exact) if row is not None}
+        return {"task_id": identity, "operations": [decode_operation(row) for row in rows.values()]}
+
+
+def require_legacy(state: Path, identity: str) -> None:
+    if "record" in read(state, identity):
+        raise Fault("supervised_admission_unavailable", "Supply current task_context for structured work; a bare task_id is not authority.")
+
+
+def _target_filter(machine: str, workspace: str, workspace_identity: str) -> tuple[str, list[str]]:
+    if (any(not isinstance(value, str) for value in (machine, workspace, workspace_identity))
+            or machine and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", machine)
+            or workspace and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", workspace) and (
+                not Path(workspace).is_absolute() or len(workspace.encode()) > 1024 or ".." in Path(workspace).parts
+                or any(ord(c) < 32 or ord(c) == 127 for c in workspace))
+            or workspace_identity and not re.fullmatch(r"[0-9a-f]{64}", workspace_identity)
+            or workspace and not machine or workspace_identity and not workspace):
+        raise Fault("invalid_task_filter", "Select a machine and optional workspace/identity.")
+    if not machine:
+        return "", []
+    keys = ("machine", "workspace", "workspace_identity")[:1 + bool(workspace) + bool(workspace_identity)]
+    sources, values = [], []
+    for slot in range(4):
+        sources.append(f"SELECT task_id FROM tasks INDEXED BY task_target_{slot} WHERE "
+                       + " AND ".join(f"{db.target_field(slot, key)}=?" for key in keys))
+        values.extend((machine, workspace, workspace_identity)[:len(keys)])
+    if not workspace:
+        sources.append("SELECT task_id FROM operations INDEXED BY operation_target WHERE machine=?")
+        values.append(machine)
+    return "task_id IN (" + " UNION ".join(sources) + ")", values
+
+
+def _list_row(connection, row, store_identity: str, machine: str, workspace: str) -> dict:
+    value = db.decode(row["current"], row["sha256"])
+    if value.get("task_id", row["task_id"]) != row["task_id"] or value["revision"] != row["revision"]:
+        raise Fault("corrupt_tasks", "Task list metadata differs from its current authority.")
+    structured = row["kind"] == "structured"
+    terminal = value.get("terminal") if structured else None
+    operations = []
+    if structured:
+        if machine and not workspace:
+            match = connection.execute("SELECT * FROM operations INDEXED BY operation_locator "
+                "WHERE task_id=? AND machine=? LIMIT 1", (row["task_id"], machine)).fetchone()
+            if match is not None:
+                decode_operation(match)
+        observed = connection.execute('''SELECT * FROM operations
+            WHERE task_id=? AND kind IN ('execution','change') AND machine IS NOT NULL
+            GROUP BY kind,machine ORDER BY kind,machine LIMIT 9''',
+            (row["task_id"],)).fetchall()
+        for item in observed[:8]:
+            decode_operation(item)
+            operations.append({key: item[key] for key in ("kind", "machine")})
+    return {"task_id": row["task_id"], "title": value["title"], "revision": row["revision"],
+            "kind": row["kind"], "state": value["control"]["state"] if structured else None,
+            "owner_store_identity": store_identity,
+            "targets": value["contract"]["targets"] if structured else [],
+            "operation_targets": operations, "operation_targets_complete": not structured or len(observed) <= 8,
+            "created_at_ms": value["created_at_ms"] if structured else None,
+            "updated_at_ms": value["updated_at_ms"] if structured else None,
+            "finished_at_ms": terminal["finished_at_ms"] if terminal else None}
+
+
+def find(state: Path, query: str = "", anchors: list[str] | None = None, identity: str = "", offset: int = 0,
+         limit: int = 20, expected_generation: int = -1, *, machine: str = "",
+         workspace: str = "", workspace_identity: str = "") -> dict:
+    scoped, scope_args = _target_filter(machine, workspace, workspace_identity)
+    if identity:
+        task_id(identity)
+    wanted = validate_metadata("lookup", anchors or [])["anchors"]
+    if (not isinstance(query, str) or len(query) > 200 or type(offset) is not int or offset < 0
+            or type(limit) is not int or not 1 <= limit <= 50 or type(expected_generation) is not int or expected_generation < -1):
+        raise Fault("invalid_range", "Use a bounded query, nonnegative offset and page size from 1 to 50.")
+    with db.connect(state) as connection:
+        if connection is None:
+            if expected_generation != -1:
+                raise Fault("task_index_changed", "The original Task database is unavailable.")
+            return {"status": "uninitialized", "tasks": [], "next_offset": None, "generation": None,
+                    "coverage": "this_store_only", "resume_authorized": False}
+        owner = db.metadata(connection)
+        generation = owner["generation"]
+        if expected_generation != -1 and generation != expected_generation:
+            raise Fault("task_index_changed", "Task lookup changed between pages; use its current generation.")
+        clauses, arguments = [], []
+        if scoped:
+            clauses.append(scoped)
+            arguments.extend(scope_args)
+        if identity:
+            clauses.append("task_id=?")
+            arguments.append(identity)
+        if query:
+            clauses.append("instr(title_key,?)>0")
+            arguments.append(query.casefold())
+        for anchor in wanted:
+            clauses.append("EXISTS(SELECT 1 FROM json_each(tasks.anchors) WHERE value=?)")
+            arguments.append(anchor)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        total = connection.execute("SELECT count(*) FROM tasks" + where, arguments).fetchone()[0]
+        rows = connection.execute("SELECT task_id,kind,current,sha256,revision FROM tasks" + where
+                                  + " ORDER BY task_id LIMIT ? OFFSET ?", [*arguments, limit, offset])
+        page = [_list_row(connection, row, owner["identity"], machine, workspace)
+                for row in rows]
+        if expected_generation != -1 and generation != expected_generation:
+            raise Fault("task_index_changed", "Task lookup changed between pages; use its current generation.")
+        exact = bool(identity or wanted) and not query
+        return {"status": "matched" if exact and total == 1 else "ambiguous" if exact and total > 1 else "candidates",
+                "tasks": page, "total": total, "next_offset": offset + len(page) if offset + len(page) < total else None,
+                "generation": generation, "coverage": "complete", "resume_authorized": False}
+
+
+def observation_page(state: Path, cursor: int = 0, limit: int = INDEX_PAGE) -> dict:
+    if type(cursor) is not int or cursor < 0 or not 1 <= limit <= INDEX_PAGE:
+        raise Fault("invalid_range", "Use an observation sequence and a bounded page.")
+    with db.connect(state) as connection:
+        if connection is None:
+            return {"entries": [], "cursor": cursor, "generation": None, "has_more": False, "complete": True}
+        rows = connection.execute("SELECT task_id,change_seq FROM tasks WHERE kind='structured' AND change_seq>? ORDER BY change_seq LIMIT ?", (cursor, limit + 1)).fetchall()
+        entries = []
+        for row in rows[:limit]:
+            try:
+                record, error = _view(connection, row["task_id"])["record"], None
+            except Fault as fault:
+                record, error = None, fault.code
+            entries.append({"task_id": row["task_id"], "sequence": row["change_seq"], "change_seq": row["change_seq"], "record": record, "error": error})
+        return {"entries": entries, "cursor": entries[-1]["sequence"] if entries else cursor,
+                "generation": db.metadata(connection)["generation"], "has_more": len(rows) > limit, "complete": True}
+
+
+def save(state: Path, identity: str, expected_revision: int, title: str, body: str, anchors: list[str]) -> dict:
+    task_id(identity)
+    meta = validate_metadata(title, anchors)
+    raw = body.encode()
+    if type(expected_revision) is not int or expected_revision < 0:
+        raise Fault("invalid_revision", "Supply the observed nonnegative checkpoint revision; zero means new.")
+    if not raw.strip() or len(raw) > MAX_CHECKPOINT or b"\0" in raw or redact(body) != body:
+        raise Fault("invalid_checkpoint", "Use a nonempty checkpoint of at most 32 KiB without credentials or NUL bytes.")
+    with db.connect(state, write=True, initialize=expected_revision == 0) as connection:
+        if connection is None:
+            raise Fault("corrupt_tasks", "The original checkpoint store is missing.")
+        row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (identity,)).fetchone()
+        revision = 0
+        if row is not None:
+            if row["kind"] != "legacy":
+                raise Fault("task_conflict", "Legacy save cannot convert structured authority.")
+            old = db.decode(row["current"], row["sha256"])
+            revision = old["revision"]
+            meta = validate_metadata(meta["title"], sorted(set(old["anchors"]) | set(meta["anchors"])))
+            if body == old["body"] and meta == {key: old[key] for key in ("title", "anchors")}:
+                if expected_revision not in (revision, revision - 1):
+                    raise Fault("task_conflict", "This retry differs from the retained checkpoint revision.")
+                return {**_view(connection, identity), "status": "unchanged"}
+        if expected_revision != revision:
+            raise Fault("task_conflict", "Read the current checkpoint revision before replacing it.")
+        if row is None:
+            db.admission_space(state)
+        value = {**meta, "revision": revision + 1, "sha256": hashlib.sha256(raw).hexdigest(),
+                 "body": body, "content_redacted": False}
+        put_legacy(connection, identity, value)
+        result = _view(connection, identity)
+    return {**result, "status": "saved"}
+
+
+def present(view: dict) -> dict:
+    """Public v2 current-state snapshot; historical rows are explicit separate pages."""
+    if "record" not in view:
+        return {**view, "read_schema": 2, "section": "summary", "complete": True, "has_more": False}
+    record = view["record"]
+    facts = view.get("facts", record.get("_facts", {}))
+    counts = {name: facts.get(name, len(record.get(field, []))) for name, field in (
+        ("operation_count", "operations"), ("history_count", "history"))}
+    counts.update({name: facts.get(name, 0) for name in ("pending_count", "unresolved_count", "unknown_count", "partial_count")})
+    result = {key: value for key, value in view.items() if key != "facts"}
+    current = deepcopy(record_core(record))
+    for stage in current["plan"]["stages"]:
+        if stage["id"] in record.get("_decisions", {}):
+            stage.pop("evidence")
+            stage["evidence_ref"] = {"task_id": record["task_id"], "section": "evidence", "stage_id": stage["id"],
+                                     "decision_version": record["_decisions"][stage["id"]]}
+    result.update(record=current, read_schema=2, section="summary", counts=counts,
+                  current_record_complete=True, record_complete=False, complete=True, has_more=False,
+                  history_ref={"task_id": record["task_id"], "section": "history"},
+                  operations_ref={"task_id": record["task_id"], "section": "operations"},
+                  unresolved_operation_ids=[op["id"] for op in record["operations"] if effects.unresolved(op)])
+    return result
+
+
+def public_read(state: Path, identity: str, *, section: str = "summary", cursor: str = "", limit: int = 20,
+                operation_id: str = "", expected_revision: int = -1, stage_id: str = "", decision_version: int = 0) -> dict:
+    import base64
+    if (section not in {"summary", "operations", "history", "evidence"} or type(limit) is not int
+            or not 1 <= limit <= records.MAX_PAGE_ITEMS or not isinstance(cursor, str) or len(cursor) > 1024
+            or operation_id and (len(operation_id) != 32 or any(c not in "0123456789abcdef" for c in operation_id))):
+        raise Fault("invalid_task_read", "Use a bounded Task section, cursor and exact original operation ID.")
+    if stage_id or decision_version:
+        if (section != "evidence" or cursor or operation_id or not stage_id
+                or type(decision_version) is not int or not 1 <= decision_version <= records.MAX_INTEGER):
+            raise Fault("invalid_task_read", "An exact stage decision requires its stage and immutable version on the evidence section.")
+        task_id(stage_id)
+    if section == "summary":
+        if cursor or operation_id:
+            raise Fault("invalid_task_read", "Summary reads do not select historical cursors or operations.")
+        return present(read(state, identity))
+    if operation_id and (section != "operations" or cursor):
+        raise Fault("invalid_task_read", "Exact original operation lookup uses the operations section without a cursor.")
+    with db.connect(state) as connection:
+        if connection is None:
+            raise Fault("tasks_uninitialized", "This private Task store has not been initialized.")
+        row = task_row(connection, identity)
+        if row["kind"] != "structured":
+            raise Fault("task_legacy", "A Markdown checkpoint has no supervised operation ledger.")
+        if expected_revision != -1 and expected_revision != row["revision"]:
+            raise Fault("task_conflict", "Task state changed before its evidence page; refresh the current snapshot.")
+        owner = db.metadata(connection)
+        if stage_id:
+            if not connection.execute("SELECT 1 FROM stage_decisions WHERE task_id=? AND stage_id=? AND version=?",
+                                      (identity, stage_id, decision_version)).fetchone():
+                raise Fault("task_evidence_not_found", "No retained decision exists for this stage and version.")
+            decision = read_decision(connection, identity, stage_id, decision_version)
+            return {"task_id": identity, "read_schema": 2, "section": "evidence", "task_revision": row["revision"],
+                    "generation": owner["generation"], "complete": True, "has_more": False, "next_cursor": None,
+                    "items": [{"kind": "stage_decision", "stage_id": stage_id, "decision_version": decision_version, **decision}]}
+        ceiling = row["operation_count"] if section == "operations" else row["history_count"]
+        after = 0
+        if cursor:
+            try:
+                token = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+                if (set(token) != {"store", "task", "section", "after", "ceiling", "revision"}
+                        or (token["store"], token["task"], token["section"]) != (owner["identity"], identity, section)
+                        or type(token["after"]) is not int or type(token["ceiling"]) is not int
+                        or not 0 <= token["after"] <= token["ceiling"] <= ceiling):
+                    raise ValueError("cursor identity differs")
+                if section == "operations" and token["revision"] != row["revision"]:
+                    raise Fault("task_conflict", "Mutable operation evidence changed between pages; refresh its revision.")
+                after, ceiling = token["after"], token["ceiling"]
+            except (ValueError, TypeError, KeyError) as error:
+                raise Fault("invalid_task_read", "The evidence cursor does not match this Task, section and watermark.") from error
+        if section == "operations":
+            clause, args = ("id=?", [operation_id]) if operation_id else ("ordinal>? AND ordinal<=?", [after, ceiling])
+            rows = connection.execute("SELECT * FROM operations WHERE task_id=? AND " + clause + " ORDER BY ordinal LIMIT ?", [identity, *args, limit + 1]).fetchall()
+            decode = lambda item: {"sequence": item["ordinal"], **decode_operation(item)}
+            sequence = "ordinal"
+        else:
+            selected = " AND kind NOT IN ('operation_admitted','operation_observed')" if section == "evidence" else ""
+            rows = connection.execute("SELECT * FROM task_events WHERE task_id=? AND seq>? AND seq<=?" + selected + " ORDER BY seq LIMIT ?", (identity, after, ceiling, limit + 1)).fetchall()
+            decode = lambda item: {"sequence": item["seq"], "kind": item["kind"], "at_ms": item["at_ms"], **db.decode(item["payload"], item["sha256"])}
+            sequence = "seq"
+        items, size = [], 0
+        for item in rows[:limit]:
+            value = decode(item)
+            length = len(item["payload"].encode())
+            if size + length > records.MAX_PAGE_BYTES:
+                if not items:
+                    raise Fault("corrupt_tasks", "An evidence item exceeds its supported page bound; preserve its original bytes.")
+                break
+            items.append(value)
+            size += length
+            after = item[sequence]
+        more = len(rows) > len(items)
+        token = {"store": owner["identity"], "task": identity, "section": section, "after": after,
+                 "ceiling": ceiling, "revision": row["revision"]}
+        next_cursor = base64.urlsafe_b64encode(records.canonical(token)).decode().rstrip("=") if more else None
+        return {"task_id": identity, "read_schema": 2, "section": section, "items": items,
+                "task_revision": row["revision"], "generation": owner["generation"], "watermark": ceiling,
+                "complete": not more, "has_more": more, "next_cursor": next_cursor}

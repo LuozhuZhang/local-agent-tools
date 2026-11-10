@@ -1,0 +1,26 @@
+get_capabilities: {skill: tools.overview}
+inspect_skills: {skill: tools.overview}
+inspect_context: {skill: tools.environment}
+inspect_workspace: {skill: tools.workspace}
+inspect_projects: {skill: tools.workspace, path: files.md}
+create_worktree: {skill: tools.workspace, path: worktrees.md}
+read_workspace_file: {skill: tools.workspace, path: files.md}
+write_workspace_file: {skill: tools.workspace, path: files.md}
+edit_workspace_file: {skill: tools.workspace, path: files.md}
+apply_workspace_patch: {skill: tools.workspace, path: files.md}
+read_workspace_change: {skill: tools.workspace, path: files.md}
+start_execution: {skill: tools.execution}
+read_execution: {skill: tools.execution, path: terminal.md}
+list_executions: {skill: tools.execution}
+cancel_execution: {skill: tools.execution, path: terminal.md}
+reconcile_execution: {skill: tools.execution, path: terminal.md}
+control_execution: {skill: tools.execution, path: terminal.md}
+find_tasks: {skill: tools.tasks, path: continue.md}
+read_task: {skill: tools.tasks, path: continue.md}
+read_task_receipts: {skill: tools.tasks, path: continue.md}
+wait_task: {skill: tools.tasks, path: continue.md}
+save_task: {skill: tools.tasks, path: continue.md}
+create_task: {skill: tools.tasks, path: create.md}
+control_task: {skill: tools.tasks, path: control.md}
+start_codex_task: {skill: tools.browser, path: reference.md}
+read_codex_task: {skill: tools.browser, path: reference.md}
