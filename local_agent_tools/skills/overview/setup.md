@@ -13,8 +13,7 @@ On this page:
 ## Install
 
 Use Python 3.12 or newer on macOS or Linux, with Git available for workspace
-identity. Task storage requires SQLite 3.51.3 or newer, or the patched 3.50.7+
-(3.50.x) or 3.44.6+ (3.44.x) releases. From a local checkout:
+identity. From a local checkout:
 
 ```sh
 python3 -m venv .venv
@@ -24,6 +23,12 @@ python3 -m venv .venv
 
 Use `requirements.lock` as the complete dependency source. Workers use the
 installed package, never a source-checkout import.
+
+The Task database needs SQLite 3.51.3 or newer, or the patched 3.50.7+ (3.50.x)
+or 3.44.6+ (3.44.x) releases. The first Task call creates it. With an older
+SQLite, Task tools fail with `task_sqlite_unsupported`; once the database exists,
+file writes, commands and worktree creation fail the same way because they check
+it for Task reservations. Reads work with any SQLite.
 
 ## Configure and run
 
@@ -37,14 +42,15 @@ Start with an existing disposable workspace; replace the example path:
 Default configuration: `~/.config/local-agent-tools/config.toml`. Private state:
 `~/.local/state/local-agent-tools/`. Global `--config` and `--state-dir` options
 go before the subcommand. `init` creates mode-0600 configuration without
-overwriting files and leaves execution **disabled** unless `--enable-commands` is
-explicit. `--enable-workspace-writes` is an independent first-run grant. Enable
-`execution_enabled = true` only for intended native commands, and
-`workspace_write_enabled = true` only for typed file edits. Restart the server
-after a configuration change. Unknown fields are rejected, not ignored.
+overwriting files. Access is read-only by default. Commands need
+`--local-access full_access --enable-commands`; typed file writes need
+`--local-access full_access --enable-workspace-writes`. Restart the server after a
+configuration change. Unknown fields are rejected, not ignored.
 
-`serve` speaks MCP over stdin and stdout. It opens no socket or port and installs
-no OS service. One server runs per state directory; a second one is refused.
+`serve` speaks MCP over stdin and stdout. It opens no network port and installs
+no OS service; each running command has a private Unix control socket under the
+state directory. Several servers may share one state directory; only one of them
+runs the background Task observer.
 
 ## Connect a client
 

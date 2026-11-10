@@ -3,19 +3,13 @@
 [Domain guide](SKILL.md)
 
 `find_tasks` returns candidates, not an authorization. Verify the original Task,
-IDs and index generation before acting. `rebuild-task-index` checks integrity;
-it does not restore missing authority. Reads never initialize or repair state.
+IDs and index generation before acting. Reads never initialize or repair state.
 
-## First-release storage
+## Storage
 
-Only Task schema 3 is writable. Earlier pre-release databases and file-based
-Task stores block activation; preserve their bytes and inspect/backup them before
-any separately authorized developer reset. There is no implicit migration,
-reset, rollback writer or historical owner takeover.
-
-Online SQLite backups include WAL content and remain write-fenced on restore
-until effects after the backup watermark are reconciled. Do not copy a live
-database alone or delete its WAL.
+Tasks live in one private SQLite database under the state directory. Do not copy
+a live database alone or delete its WAL. There is no migration, reset, rollback
+writer or owner takeover.
 
 ## Legacy checkpoints
 

@@ -84,8 +84,8 @@ Preview requires `dry_run=true` and empty `change_id`; it allocates no record,
 directory, staging file or execution. Apply requires a saved 32-lowercase-hex
 change ID and may bind the approved `expected_plan_sha256`. All preconditions
 are recomputed; preview grants no permission and holds no approval-time lease.
-`workspace_write_enabled` is independent of command permission; omitted/null
-inherits the legacy command grant. Preview/scoped receipt reads need no write grant.
+`workspace_write_enabled` is independent of command permission and defaults to
+false. Preview/scoped receipt reads need no write grant.
 
 Use `read_workspace_change` after lost replies. An identical retained request
 returns original evidence even after later third-party edits; changed intent
@@ -120,7 +120,7 @@ against external editors. No hidden formatter, shell, test, LSP, commit or rollb
 *** End Patch
 ```
 
-Use `om_patch_v1` only when advertised. Preconditions cover exactly every touched
+Use `patch_v1` only when advertised. Preconditions cover exactly every touched
 path, including both move endpoints. Control lines use exact LF markers; this is
 not unified diff or shell syntax. Update hunks begin with bare `@@`, require
 nonempty original context/removals and a real change, and match unique ordered,

@@ -26,8 +26,6 @@ that machine; an operation alone does not prove Workspace membership. Results
 include state, declared targets, bounded native operation-machine references,
 owning Task-store identity and available timestamps. Follow `next_offset` only
 with `expected_generation`; `task_index_changed` requires restarting at zero.
-Derived SQLite indexes are installed on new stores or explicit managed Task
-migration; `task_index_upgrade_required` never triggers a reader-side repair.
 
 `read_task_receipts(task_id, expected_revision, operation_ids)` is a bounded, passive reader for 1–8 exact local Execution/Change operations on the same Task revision. It returns complete original receipts under the Task's current store identity; callers must still check current permission, directory/provider scope, and fresh Task revision before protected result release. Changed, missing, conflicting or oversized evidence fails closed. No result can be inferred from an absent receipt; never replay an original effect.
 
@@ -50,7 +48,7 @@ Migration-era legacy summaries remain complete original bounded records.
 
 ## Original-result observation
 
-The service observer collects previously admitted native command, control,
+The server observer collects previously admitted native command, control,
 cancel and change receipts without a connected client. Bounded observation
 faults and retry budgets appear in read_task. Results and handoffs are observed,
 never replayed, automatically accepted or used to authorize new effects.

@@ -107,8 +107,6 @@ def validate_operation(operation: dict, current: dict) -> dict:
             or value["epoch"] > current["control"]["epoch"] or not current["created_at_ms"] <= value["admitted_at_ms"] <= current["updated_at_ms"]
             or value["observed_at_ms"] is not None and value["observed_at_ms"] > current["updated_at_ms"]):
         raise ValueError("operation authority binding differs")
-    if current["format"] < 4 and any((value["result"] or {}).get(key) is not None for key in ("effect", "failure_code")):
-        raise ValueError("format does not permit scoped results")
     if value["plan_revision"] == current["plan"]["revision"] and value["source_sha256"] != stages[value["stage_id"]]["source_sha256"]:
         raise ValueError("operation source differs")
     return value

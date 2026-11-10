@@ -8,13 +8,13 @@
 workflow. Supply a local configured `machine`, workspace `cwd`, original
 `execution_id`, bounded `goal`, `start_url` and exact `allowed_origins`. `mode`
 is browser-only; `browser` is auto/iab/chrome/edge. Timeout is 1-1800 seconds.
-The existing local execution grant, lifecycle gate, task claim and native workspace
+The existing local execution grant, task claim and native workspace
 scope apply. Structured contracts include `start_execution` (the underlying
 operation) and use the same operation/execution ID; no second task record exists.
 
 The adapter discovers the enabled native `node_repl` bridge in CODEX_HOME/config.toml
 and reads the browser Skill from that bridge's installed desktop-app resources.
-It uses `codex` on PATH when present; a packaged service without the developer's
+It uses `codex` on PATH when present; a server without the developer's
 shell PATH uses `codex-cli` beside that same configured native bridge, either as
 an executable or the directory containing `CodexCLI.app/Contents/MacOS/codex`.
 It does not scan other apps, install anything, copy browser libraries,

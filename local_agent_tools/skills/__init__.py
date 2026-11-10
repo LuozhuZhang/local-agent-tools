@@ -11,11 +11,8 @@ from local_agent_tools.skills.guidance import describe_tool, for_tool
 if TYPE_CHECKING:
     from local_agent_tools.config import Settings
 
-BUNDLED = "package:local_agent_tools/_skills/SKILL.md"
-
-
 def _selected(items: dict[str, catalog.Skill], identity: str) -> catalog.Skill:
-    identity = "tools.overview" if identity in ("", BUNDLED) else identity
+    identity = identity or "tools.overview"
     item = items.get(identity) or next((item for item in items.values() if item.source == identity), None)
     if item is None:
         raise Fault("skill_unavailable", "Select an exact Skill source returned by the current list; check discovery warnings.")
@@ -36,7 +33,7 @@ def inspect(config: "Settings", action: str = "list", skill: str = "", path: str
     items = catalog.bundled()
     warnings = []
     discovery = "bundled_tool_binding" if binding else "bundled_resources"
-    known_builtin = skill in ("", BUNDLED) or skill in items or any(item.source == skill for item in items.values())
+    known_builtin = not skill or skill in items or any(item.source == skill for item in items.values())
     if not binding and (action == "list" or not known_builtin):
         items, warnings = catalog.discover(config, items)
         discovery = "bundled_metadata_and_configured_root_or_immediate_skill_directories"
@@ -62,14 +59,11 @@ def inspect(config: "Settings", action: str = "list", skill: str = "", path: str
     item = _selected(items, skill)
     if action == "read":
         relative = path or "SKILL.md"
-        if item.identity == "tools.overview" and relative == "worktrees.md":
-            item = _selected(items, "tools.workspace")
         if item.identity == "tools.overview" and relative == "SKILL.md":
             raw = reader.resource(item.root, relative, bundled=True)
             result = reader.page(catalog.overview(raw, items), relative, offset, expected_snapshot)
         else:
             result = reader.read(item.root, relative, offset, expected_snapshot, bundled=item.bundled)
         return {**item.item(), "warnings": warnings, "discovery": discovery, **result}
-    aliases = ("worktrees.md",) if item.identity == "tools.overview" and path in ("", ".") else ()
     return {**item.item(), "warnings": warnings, "discovery": discovery,
-            **reader.listing(item.root, path, offset, limit, expected_snapshot, aliases=aliases)}
+            **reader.listing(item.root, path, offset, limit, expected_snapshot)}

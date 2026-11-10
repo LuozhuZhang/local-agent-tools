@@ -20,9 +20,7 @@ if TYPE_CHECKING:
 
 
 def root_for(config: "Settings", machine: str, workspace: str) -> Path:
-    target = config.machine(machine)
-    if target.local_access is None:
-        raise Fault("local_approval_required", "Retired Workspace approvals do not permit local directory reads.")
+    config.machine(machine)
     item = config.workspaces.get(workspace)
     if item is not None and item.machine == machine:
         selected = Path(item.root)

@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import sqlite3
 import stat
@@ -24,8 +23,7 @@ INITIALIZING = b"local-agent-tools-task-initializing-v1\n"
 _active = ContextVar("task_transaction", default=None)
 SCHEMA = """
 CREATE TABLE store (singleton INTEGER PRIMARY KEY CHECK(singleton=1), schema INTEGER NOT NULL,
- identity TEXT NOT NULL, active INTEGER NOT NULL, generation INTEGER NOT NULL,
- archive TEXT, import_digest TEXT, restore_required INTEGER NOT NULL DEFAULT 0) STRICT;
+ identity TEXT NOT NULL, generation INTEGER NOT NULL) STRICT;
 CREATE TABLE tasks (task_id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('structured','legacy')),
  revision INTEGER NOT NULL, change_seq INTEGER NOT NULL, current TEXT NOT NULL, sha256 TEXT NOT NULL,
  title_key TEXT NOT NULL, anchors TEXT NOT NULL, operation_count INTEGER NOT NULL DEFAULT 0,
@@ -57,7 +55,6 @@ CREATE TABLE stage_decisions (task_id TEXT NOT NULL REFERENCES tasks(task_id) DE
  stage_id TEXT NOT NULL, version INTEGER NOT NULL, payload TEXT NOT NULL, sha256 TEXT NOT NULL,
  PRIMARY KEY(task_id,stage_id,version)) STRICT;
 CREATE INDEX event_facts ON task_events(task_id,kind,stage_id,at_ms);
-CREATE TABLE imports (path TEXT PRIMARY KEY, sha256 TEXT NOT NULL, size INTEGER NOT NULL) STRICT;
 CREATE TABLE writer_reservations (
  task_id TEXT NOT NULL REFERENCES tasks(task_id), root TEXT NOT NULL,
  device INTEGER NOT NULL, inode INTEGER NOT NULL,
@@ -79,27 +76,6 @@ TARGET_INDEXES = tuple(
                 ("machine", "workspace", "workspace_identity")) + ")"
     for slot in range(4)
 ) + ("CREATE INDEX task_original_targets ON operations(task_id,kind,machine)",)
-
-
-def target_indexes_ready(connection: sqlite3.Connection) -> bool:
-    indexes = {row["name"]: row["sql"] for row in connection.execute(
-        "SELECT name,sql FROM sqlite_master WHERE type='index' AND "
-        "(name LIKE 'task_target_%' OR name='task_original_targets')")}
-    expected = {f"task_target_{i}": sql for i, sql in enumerate(TARGET_INDEXES[:4])}
-    expected["task_original_targets"] = TARGET_INDEXES[-1]
-    if indexes and indexes != expected:
-        raise Fault("corrupt_tasks", "The retained Task target indexes are incomplete or changed.")
-    return bool(indexes)
-
-
-def ensure_target_indexes(connection: sqlite3.Connection) -> None:
-    """One explicit, transactional derived-index upgrade; no Task bytes change."""
-    if target_indexes_ready(connection):
-        return
-    connection.execute("BEGIN IMMEDIATE")
-    for statement in TARGET_INDEXES:
-        connection.execute(statement)
-    commit(connection)
 
 
 def sqlite_runtime() -> dict:
@@ -148,8 +124,6 @@ def initializing(state: Path, *, durable: bool = False) -> bool:
             os.fsync(stream.fileno())
     if marker not in (b"", INITIALIZING) or before.st_nlink == 2 and marker != INITIALIZING:
         raise Fault("corrupt_tasks", "The Task initialization marker is incomplete or unknown.")
-    if marker and (os.path.lexists(state / "tasks") or any(state.glob("tasks-legacy-*"))):
-        raise Fault("corrupt_tasks", "Fresh Task initialization cannot replace retained legacy authority.")
     return bool(marker)
 
 
@@ -160,8 +134,7 @@ def initialization_lock(state: Path):
     published = os.path.lexists(lock)
     if published:
         initializing(state)
-    elif (os.path.lexists(state / "tasks.db") or os.path.lexists(state / "tasks")
-            or any(state.glob("tasks-legacy-*"))):
+    elif os.path.lexists(state / "tasks.db"):
         raise Fault("corrupt_tasks", "Retained Task authority lost its original lock; never create another inode.")
     locks = private_directory(state / "locks")
     if not published and os.path.lexists(prepared):
@@ -174,8 +147,7 @@ def initialization_lock(state: Path):
                 raise Fault("task_conflict", "Another initializer published the original Task lock; retry its identity.")
             initializing(state)
         else:
-            if published or (os.path.lexists(state / "tasks.db") or os.path.lexists(state / "tasks")
-                             or any(state.glob("tasks-legacy-*"))):
+            if published or os.path.lexists(state / "tasks.db"):
                 raise Fault("corrupt_tasks", "The original Task lock or authority changed during initialization.")
             info = private_path(prepared)
             held = os.fstat(stream.fileno())
@@ -194,7 +166,7 @@ def initialization_lock(state: Path):
         private_path(lock)
         if os.path.lexists(state / "tasks.db"):
             finish_initialization(state)
-        elif not initializing(state) and not os.path.lexists(state / "tasks"):
+        elif not initializing(state):
             raise Fault("corrupt_tasks", "The established Task store disappeared; never initialize empty history.")
         yield
 
@@ -204,9 +176,8 @@ def finish_initialization(state: Path) -> None:
     if not initializing(state):
         return
     with closing(_open(state, write=False)) as connection:
-        owner = metadata(connection)
-        if (owner["generation"] or owner["archive"] is not None or owner["restore_required"]
-                or connection.execute("SELECT 1 FROM tasks UNION ALL SELECT 1 FROM imports LIMIT 1").fetchone()):
+        if (metadata(connection)["generation"]
+                or connection.execute("SELECT 1 FROM tasks LIMIT 1").fetchone()):
             raise Fault("corrupt_tasks", "Initialization recovery requires an empty, unpublished Task authority.")
     sync_directory(state)
     sync_directory(state / "locks")
@@ -263,27 +234,18 @@ def _open(state: Path, *, write: bool) -> sqlite3.Connection:
         raise
 
 
-def metadata(connection: sqlite3.Connection, *, preflight_native_cutover: bool = False) -> dict:
+def metadata(connection: sqlite3.Connection) -> dict:
     row = connection.execute("SELECT * FROM store WHERE singleton=1").fetchone()
-    old_read = (preflight_native_cutover and row is not None and row["schema"] in (1, 2)
-                and connection.execute("PRAGMA query_only").fetchone()[0] == 1)
-    if row is None or row["schema"] != SCHEMA_VERSION and not old_read:
-        raise Fault("unsupported_task_format", "The Task schema needs one managed native cutover before normal operation.")
+    if row is None or row["schema"] != SCHEMA_VERSION:
+        raise Fault("unsupported_task_format", "This Task schema is not supported by this version.")
     value = dict(row)
     if (len(value["identity"]) != 32 or any(c not in "0123456789abcdef" for c in value["identity"])
-            or value["active"] not in (0, 1) or not 0 <= value["generation"] <= records.MAX_INTEGER
-            or value["restore_required"] not in (0, 1)):
+            or not 0 <= value["generation"] <= records.MAX_INTEGER):
         raise Fault("corrupt_tasks", "Task store ownership metadata is invalid; preserve its original database.")
-    archive, digest = value["archive"], value["import_digest"]
-    if ((archive is None) != (digest is None) or archive is not None and (
-            not isinstance(archive, str) or re.fullmatch(r"tasks-legacy-[0-9a-f]{32}", archive) is None
-            or not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None)):
-        raise Fault("corrupt_tasks", "Task archive identity and import digest must bind one private retained source.")
     return value
 
 
-def create_database(state: Path, *, active: bool, archive: str | None = None,
-                    import_digest: str | None = None, generation: int = 0) -> None:
+def create_database(state: Path) -> None:
     """Called under the original exclusive Task lock; never replaces a database."""
     sqlite_runtime()
     prepared = state / (".tasks-" + uuid.uuid4().hex + ".db")
@@ -303,8 +265,7 @@ def create_database(state: Path, *, active: bool, archive: str | None = None,
                 connection.execute(statement)
         for statement in TARGET_INDEXES:
             connection.execute(statement)
-        connection.execute("INSERT INTO store VALUES (1,?,?,?,?,?,?,0)",
-            (SCHEMA_VERSION, uuid.uuid4().hex, int(active), generation, archive, import_digest))
+        connection.execute("INSERT INTO store VALUES (1,?,?,0)", (SCHEMA_VERSION, uuid.uuid4().hex))
         commit(connection)
         if connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone() != (0, 0, 0):
             raise Fault("task_write_unverified", "The private Task schema checkpoint was not acknowledged.")
@@ -342,8 +303,8 @@ def _fault(error: sqlite3.Error, write: bool) -> Fault:
 
 
 @contextmanager
-def connect(state: Path, *, write: bool = False, initialize: bool = False, maintenance: bool = False):
-    """Short shared maintenance lease; SQLite owns normal read/write concurrency."""
+def connect(state: Path, *, write: bool = False, initialize: bool = False):
+    """Short shared lease on the original lock; SQLite owns normal read/write concurrency."""
     if not state.is_absolute():
         raise Fault("invalid_state", "Use an absolute private state directory.")
     retained = _active.get()
@@ -361,35 +322,22 @@ def connect(state: Path, *, write: bool = False, initialize: bool = False, maint
     lock_present = os.path.lexists(state / "locks/tasks.lock")
     pending = lock_present and initializing(state)
     if not os.path.lexists(state / "tasks.db"):
-        if os.path.lexists(state / "tasks"):
-            if write:
-                raise Fault("task_migration_required", "Activate the reviewed Task database migration before new task writes.")
-            yield None
-            return
-        if lock_present and not pending or any(state.glob("tasks-legacy-*")):
+        if lock_present and not pending:
             raise Fault("corrupt_tasks", "The existing Task store disappeared; never initialize over retained ownership.")
         if not initialize:
             yield None
             return
     if initialize and (pending or not os.path.lexists(state / "tasks.db")):
         with initialization_lock(state):
-            if os.path.lexists(state / "tasks"):
-                raise Fault("task_conflict", "Task storage appeared during initialization; read its original identity.")
             if not os.path.lexists(state / "tasks.db"):
-                create_database(state, active=True)
+                create_database(state)
     connection = None
     try:
         _paths(state)
         with lease(state / "locks/tasks.lock", shared=True, create=False):
             connection = _open(state, write=write)
             connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-            owner = metadata(connection, preflight_native_cutover=maintenance and not write)
-            if owner["active"] and os.path.lexists(state / "tasks"):
-                raise Fault("corrupt_tasks", "SQLite and a legacy Task directory both claim authority.")
-            if not maintenance and not owner["active"]:
-                raise Fault("task_activation_pending", "Task storage activation is incomplete; continue the original managed migration.")
-            if write and owner["restore_required"] and not maintenance:
-                raise Fault("task_restore_unreconciled", "Account for effects after the backup watermark before enabling restored task writes.")
+            metadata(connection)
             token = _active.set((state, connection, write))
             try:
                 yield connection
@@ -437,36 +385,6 @@ def admission_space(state: Path) -> None:
     _paths(state)
     if shutil.disk_usage(state).free < MIN_ADMISSION_FREE:
         raise Fault("task_storage_full", "Low free disk space is reserved for original outcomes and stopping.")
-
-
-def storage_state(state: Path) -> dict:
-    if not os.path.lexists(state / "tasks.db"):
-        if not os.path.lexists(state / "tasks"):
-            lock_present = os.path.lexists(state / "locks/tasks.lock")
-            pending = lock_present and initializing(state)
-            if lock_present and not pending or any(state.glob("tasks-legacy-*")):
-                raise Fault("corrupt_tasks", "Retained Task ownership has no authoritative store.")
-            return {"kind": "absent", "schema": None, "identity": None, "generation": None,
-                    "active": False, "fenced": pending}
-        from .index import read_index
-        private_path(state, directory=True)
-        private_path(state / "tasks", directory=True)
-        private_path(state / "locks", directory=True)
-        private_path(state / "locks/tasks.lock")
-        with lease(state / "locks/tasks.lock", shared=True, create=False):
-            index = read_index(state / "tasks")
-        return {"kind": "legacy", "schema": None, "identity": None, "generation": index["generation"],
-                "active": False, "fenced": False}
-    with connect(state, maintenance=True) as connection:
-        owner = metadata(connection, preflight_native_cutover=True)
-        legacy = os.path.lexists(state / "tasks")
-        fenced = not legacy
-        if owner["archive"] and fenced:
-            private_path(state / owner["archive"], directory=True)
-        return {"kind": "legacy" if legacy else "sqlite", "schema": owner["schema"],
-                "identity": owner["identity"], "generation": owner["generation"],
-                "active": bool(owner["active"]), "fenced": fenced,
-                "restore_required": bool(owner["restore_required"])}
 
 
 def writer_rows(connection, target: dict, *, foreign_to: str | None = None):

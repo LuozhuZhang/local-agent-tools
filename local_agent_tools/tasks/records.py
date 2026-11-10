@@ -6,7 +6,7 @@ import re
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, model_serializer, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from local_agent_tools.foundation.sanitize import Fault, redact
 
@@ -18,7 +18,7 @@ MAX_EVENT_BYTES = 65536
 MAX_PAGE_BYTES = 65536
 MAX_PAGE_ITEMS = 50
 MAX_INTEGER = 2**53 - 1
-READ_FORMATS = (1, 2, 3, 4)
+READ_FORMATS = (4,)
 
 
 def _text(value: str, limit: int) -> str:
@@ -73,11 +73,10 @@ def version_conflict(record: dict, revision: int, plan_revision: int | None = No
     context_changed = any(key != "task_revision" for key in changed)
     evidence = {"task_id": record["task_id"], **current, "expected": expected, "changed_fields": changed,
                 "reason": "context_changed" if context_changed else "snapshot_changed"}
-    if record["format"] >= 4:
-        evidence["control_revision"] = record["control_revision"]
-        if (record["control_revision"] <= revision < record["revision"]
-                and (plan_revision, epoch) == (current["plan_revision"], current["continuation_epoch"])):
-            evidence["observation_only"] = True
+    evidence["control_revision"] = record["control_revision"]
+    if (record["control_revision"] <= revision < record["revision"]
+            and (plan_revision, epoch) == (current["plan_revision"], current["continuation_epoch"])):
+        evidence["observation_only"] = True
     summary = "Task continuation context changed" if context_changed else "Task snapshot changed"
     return Fault("task_conflict", f"{summary} ({', '.join(changed)}); read the current task and original results before another action.",
                  evidence)
@@ -228,22 +227,7 @@ class Control(Model):
     pending_decision: Text512 | None
 
 
-def _native_locator(value):
-    # One-way canonicalization of previously retained *local* Task evidence.
-    # Non-null SSH target pins are never accepted as native execution authority.
-    if isinstance(value, dict) and "target_identity" in value:
-        if value["target_identity"] is not None:
-            raise ValueError("retired non-native target locator")
-        return {key: item for key, item in value.items() if key != "target_identity"}
-    return value
-
-
 class ExecutionLocator(Model):
-    @model_validator(mode="before")
-    @classmethod
-    def native_only(cls, value):
-        return _native_locator(value)
-
     kind: Literal["execution"]
     machine: Name
     execution_id: ID
@@ -251,11 +235,6 @@ class ExecutionLocator(Model):
 
 
 class ChangeLocator(Model):
-    @model_validator(mode="before")
-    @classmethod
-    def native_only(cls, value):
-        return _native_locator(value)
-
     kind: Literal["change"]
     machine: Name
     change_id: ID
@@ -350,7 +329,7 @@ class LastUpdate(Model):
 
 
 class Current(Model):
-    format: Annotated[int, Field(strict=True, ge=1, le=4)]
+    format: Literal[4]
     task_id: TaskID
     revision: Revision
     title: Title
@@ -365,23 +344,13 @@ class Current(Model):
     recovery: Recovery | None
     terminal: Terminal | None
     last_update: LastUpdate
-    control_revision: Revision | None = None
-
-    @model_serializer(mode="wrap")
-    def serialized(self, handler):
-        value = handler(self)
-        if self.format < 4:
-            value.pop("control_revision", None)
-        return value
+    control_revision: Revision
 
     @model_validator(mode="after")
     def references(self):
         _stages(self.contract, self.plan.stages)
-        if self.format < 4:
-            if self.control_revision is not None:
-                raise ValueError("scoped supervision requires format 4")
-        elif self.control_revision is None or self.control_revision > self.revision:
-            raise ValueError("format 4 needs its material control revision")
+        if self.control_revision > self.revision:
+            raise ValueError("the material control revision cannot follow the record revision")
         if self.anchors != sorted(set(self.anchors)) or self.created_at_ms > self.updated_at_ms or self.plan.revision > self.revision:
             raise ValueError("invalid record ordering")
         stages = {stage.id: stage for stage in self.plan.stages}
@@ -434,13 +403,8 @@ class Record(Current):
     @model_validator(mode="after")
     def references(self):
         _stages(self.contract, self.plan.stages)
-        if self.format < 4:
-            if self.control_revision is not None or any(
-                    op.result is not None and (
-                        op.result.failure_code is not None or op.result.effect is not None) for op in self.operations):
-                raise ValueError("scoped supervision requires format 4")
-        elif self.control_revision is None or self.control_revision > self.revision:
-            raise ValueError("format 4 needs its material control revision")
+        if self.control_revision > self.revision:
+            raise ValueError("the material control revision cannot follow the record revision")
         if self.anchors != sorted(set(self.anchors)) or self.created_at_ms > self.updated_at_ms or self.plan.revision > self.revision:
             raise ValueError("invalid record ordering")
         stages = {stage.id: stage for stage in self.plan.stages}
@@ -632,20 +596,3 @@ def _pairs(items: list[tuple[str, object]]) -> dict:
             raise ValueError("duplicate JSON key")
         value[key] = item
     return value
-
-
-def decode(raw: bytes) -> dict:
-    try:
-        if len(raw) > MAX_RECORD:
-            raise ValueError("record too large")
-        value = json.loads(raw, object_pairs_hook=_pairs)
-        if not isinstance(value, dict) or type(value.get("format")) is not int or value["format"] not in READ_FORMATS:
-            raise Fault("unsupported_task_format", "The actual reader does not support this structured task format.")
-        record = Record.model_validate(value).model_dump()
-        if canonical(record) != raw:
-            raise ValueError("noncanonical task record")
-        return record
-    except Fault:
-        raise
-    except (ValidationError, ValueError, TypeError, UnicodeError, RecursionError) as error:
-        raise Fault("corrupt_tasks", "The canonical task is invalid or incomplete; preserve it without fallback or overwrite.") from error

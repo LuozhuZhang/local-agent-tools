@@ -43,8 +43,7 @@ def page(raw: bytes, path: str, offset: int, expected_snapshot: str) -> dict:
     return {"path": path, "sha256": digest, "snapshot": digest, **text_page(raw, offset)}
 
 
-def listing(root: Path, path: str, offset: int, limit: int, expected_snapshot: str,
-            *, aliases: tuple[str, ...] = ()) -> dict:
+def listing(root: Path, path: str, offset: int, limit: int, expected_snapshot: str) -> dict:
     parts = () if path in ("", ".") else file_parts(path)
     with file_parent(root, (*parts, "unused")) as parent:
         with os.scandir(parent) as entries:
@@ -53,9 +52,6 @@ def listing(root: Path, path: str, offset: int, limit: int, expected_snapshot: s
                      "symlink": entry.is_symlink()}
                     for entry in found[:MAX_SCAN_ENTRIES]
                     if not excluded(Path(entry.name.casefold()))]
-    names = {entry["name"] for entry in selected}
-    selected.extend({"name": alias, "directory": False, "symlink": False}
-                    for alias in aliases if alias not in names)
     selected.sort(key=lambda entry: entry["name"])
     snapshot = hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest()
     if expected_snapshot and expected_snapshot != snapshot:

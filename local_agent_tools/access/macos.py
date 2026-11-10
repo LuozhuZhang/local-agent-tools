@@ -247,7 +247,7 @@ def own_terminal(text: str, terminal: str) -> str:
 
 
 def environment(base: dict, private: Path) -> dict:
-    """Construct the command environment; nothing else from the service is inherited."""
+    """Construct the command environment; nothing else from the server is inherited."""
     kept = {key: value for key, value in base.items() if key in KEPT_ENVIRONMENT or key.startswith("LC_")}
     return kept | {"HOME": str(private / "home"), "TMPDIR": str(private / "tmp") + "/",
                    "XDG_CACHE_HOME": str(private / "cache"), "XDG_CONFIG_HOME": str(private / "config"),

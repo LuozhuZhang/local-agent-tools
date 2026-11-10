@@ -50,36 +50,6 @@ def _scope(config, state: Path, machine: str, record: dict) -> str:
     raise Fault("scope_unavailable", "The original directory identity changed.")
 
 
-def preserve_change_routes(state: Path, current, candidate, changed: set[tuple[str, str]]) -> None:
-    """Reject a new binding when an original change would lose its read route."""
-    store = records._store(state)
-    if store is None:
-        return
-    owner = records._owner(state)
-    for directory in records._entries(store):
-        record = records._load(directory)
-        if record["owner_sha256"] != owner:
-            raise Fault("change_store_corrupt", "An original workspace change has a different state owner.")
-        original = []
-        for machine in current.machines:
-            try:
-                original.append((machine, _scope(current, state, machine, record)))
-            except Fault as error:
-                if error.code != "scope_unavailable":
-                    raise
-        if len(original) != 1:
-            raise Fault("workspace_reference_unavailable", "The original workspace change has no unambiguous read route.")
-        machine, name = original[0]
-        if (machine, name) not in changed:
-            continue
-        try:
-            _scope(candidate, state, machine, record)
-        except Fault as error:
-            if error.code != "scope_unavailable":
-                raise
-            raise Fault("workspace_in_use", "A retained workspace change would lose its original read route.") from error
-
-
 def read_change(config, state: Path, machine: str, change_id: str, observe_current: bool = False) -> dict:
     config.machine(machine)
     if not schema.is_hex(change_id, 32) or type(observe_current) is not bool:
@@ -125,9 +95,7 @@ def _apply(config, state, machine, workspace, request, change_id, dry_run, valid
         sizing = schema.initial_record(request, "0" * 32, plan["context"], "0" * 64, "0" * 64, time.time())
         sizing.update(plan=plan, plan_sha256=schema.fingerprint(plan), effects=schema.initial_effects(plan, "0" * 32), status="prepared")
         schema.check_record_budget(sizing)
-        target = config.machine(machine)
-        grant = target.workspace_write_enabled
-        effective = target.execution_enabled if grant is None else grant
+        effective = config.machine(machine).workspace_write_enabled
         return {"machine": machine, "workspace": workspace, "status": "preview", "plan": plan,
                 "plan_sha256": schema.fingerprint(plan), "workspace_write_enabled": effective, "diff_kind": "proposed",
                 **preparation._display(plan, sources, desired)}

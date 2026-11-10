@@ -34,7 +34,7 @@ def _reference(view: dict) -> dict:
     return {"task_id": record["task_id"], "task_revision": record["revision"],
             "plan_revision": record["plan"]["revision"], "continuation_epoch": record["control"]["epoch"],
             "index_status": view["index_status"], "handoff_id": (record["handoff"] or {}).get("id"),
-            "control_revision": record.get("control_revision", record["revision"]),
+            "control_revision": record["control_revision"],
             "unresolved_operation_ids": [item["id"] for item in record["operations"] if effects.unresolved(item)]}
 
 
@@ -132,7 +132,7 @@ class TaskAdmission:
             lambda value, now: transitions.apply_control(value, request, self.principal, now),
             expected_revision=request["expected_revision"], last_update=update,
             expected_plan_revision=request["expected_plan_revision"], expected_epoch=request["expected_epoch"],
-            upgrade=True, operation_ids=operation_ids, retained_targets=retained_targets)
+            operation_ids=operation_ids, retained_targets=retained_targets)
         if action == "cancel" and view["record"]["terminal"] is None:
             view = self._cancel_owned(view, request["update_id"])
         return view
@@ -374,7 +374,7 @@ class TaskAdmission:
                     lambda value, now: self._admit(value, operation, context, method, now),
                     expected_revision=context["task_revision"],
                     expected_plan_revision=context["plan_revision"], expected_epoch=context["continuation_epoch"],
-                    allow_observations=True, upgrade=True, operation_ids=operation_ids, reserve_disk=method != "cancel_execution",
+                    allow_observations=True, operation_ids=operation_ids, reserve_disk=method != "cancel_execution",
                     writer_target=target)
             if target is not None:
                 def effect_guard(root):
@@ -401,11 +401,10 @@ class TaskAdmission:
                     unstarted = code == "resource_busy" and method in EXECUTION_METHODS and self.app.task_receipts.unstarted_local(operation)
                     result, enriched = task_receipts.receipt_result("failed" if no_effect or unstarted else "unknown",
                                                 summary=f"Domain failure: {code}."), locator
-                if admitted["record"]["format"] >= 4:
-                    phase = {"running": "active", "partial": "effect_partial", "unknown": "effect_unknown"}.get(result["status"], "effect_verified")
-                    if no_effect and result["status"] == "failed":
-                        phase = "known_no_effect"
-                    result = dict(result, failure_code=code, effect=phase)
+                phase = {"running": "active", "partial": "effect_partial", "unknown": "effect_unknown"}.get(result["status"], "effect_verified")
+                if no_effect and result["status"] == "failed":
+                    phase = "known_no_effect"
+                result = dict(result, failure_code=code, effect=phase)
                 self._publish(record["task_id"], [(operation["id"], result, enriched)], expected=expected)
                 raise
             result, enriched = task_receipts.observation(operation, observed)

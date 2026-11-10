@@ -32,7 +32,7 @@ def register_task_tools(application, guided_tool, waiting):
                            update_id: Annotated[str, Field(min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$")],
                            transition: tasks.Transition,
                            operation_scope: OperationScope | None = None) -> CallToolResult:
-        """Control the original task using exact task/plan/epoch revisions; retain update_id after uncertainty. Renew the original claim_id/principal/epoch. Expired authority requires a revised contract with fresh evidence. bind_effect_scope needs original normalized arguments and never resolves an unknown effect. Claims grant no permission. Pause blocks new admission; cancellation preserves admitted/unknown effects. Finish requires action, outcome, acceptance references to accepted original evidence and limitations. Inspect returned state and observation blockers."""
+        """Control the original task using exact task/plan/epoch revisions; retain update_id after uncertainty. Renew the original claim_id/principal/epoch. Expired authority requires a revised contract with fresh evidence. Claims grant no permission. Pause blocks new admission; cancellation preserves admitted/unknown effects. Finish requires action, outcome, acceptance references to accepted original evidence and limitations. Inspect returned state and observation blockers."""
         operation = partial(_reply, lambda: application.control_task(task_id, expected_revision,
             expected_plan_revision, expected_epoch, update_id, transition.model_dump(),
             operation_scope=_operation_scope(operation_scope)), task_output=True)

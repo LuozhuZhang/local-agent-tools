@@ -168,25 +168,3 @@ def _observed(directory: Path, record: dict | None = None, *, owned: bool = Fals
                     f" Continue only within current authorization; {preparation}, then use a new change ID."
                     " Preserve this original receipt; do not replay its request.")
         return result
-
-
-def check_change_state(state: Path, *, require_idle: bool = False) -> dict:
-    """Public, read-only format validation for candidate/target compatibility checks."""
-    store = _store(state)
-    count, formats = 0, set()
-    if store is not None:
-        owner = _owner(state)
-        for directory in _entries(store):
-            try:
-                record = _load(directory)
-            except FileNotFoundError as error:
-                raise Fault("change_history_unavailable", "A retained allocation has incomplete history.") from error
-            if record["owner_sha256"] != owner:
-                raise Fault("change_store_corrupt", "A retained change belongs to a different state owner.")
-            if require_idle and record["status"] not in {"applied", "unchanged", "rejected"}:
-                raise Fault("activation_deferred", "An original workspace change is active or unresolved; no write was replayed.")
-            count += 1
-            formats.add(record["format"])
-    return {"workspace_change_format": schema.CHANGE_FORMAT, "workspace_change_read_formats": list(schema.READ_CHANGE_FORMATS),
-            "workspace_change_formats_present": sorted(formats), "workspace_change_records": count,
-            "workspace_change_store_present": store is not None}

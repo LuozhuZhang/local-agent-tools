@@ -3,7 +3,6 @@
 from collections.abc import Iterator
 import json
 from contextlib import contextmanager
-import os
 from pathlib import Path
 import threading
 import time
@@ -15,7 +14,7 @@ from local_agent_tools.config import Settings
 from local_agent_tools.execution import DEFAULT_TIMEOUT, MAX_TIMEOUT, MAX_WAIT, MAX_WAITERS, MAX_RESULT_BYTES, SEGMENT_BYTES, bound_output, MAX_CONTROL_SEQ, MAX_INPUT
 from local_agent_tools.foundation.files import MAX_SCAN_ENTRIES, MAX_TEXT_FILE, TEXT_PAGE
 from local_agent_tools.foundation.sanitize import Fault
-from local_agent_tools.foundation.state import lease, private_directory
+from local_agent_tools.foundation.state import private_directory
 
 from local_agent_tools.access import rules as scopes
 from . import environment, task_attention
@@ -44,10 +43,10 @@ class Application:
 
     @contextmanager
     def _admit(self) -> Iterator[None]:
+        """Prepare the private state directories every mutation writes under."""
         private_directory(self.state)
         private_directory(self.state / "locks")
-        with lease(self.state / "locks/lifecycle.lock", shared=True):
-            yield
+        yield
 
     def _scope(self, machine: str, value: dict | None):
         return None if value is None else scopes.compile(self.config, self.state, machine, value)
@@ -72,7 +71,7 @@ class Application:
             "device_access": {"protocol": 1, "directory_selector": "workspace_name", "absolute_local_directories": True},
             "operation_scope": scopes.capabilities(),
             "version": __version__, "configuration_sha256": self.config.configuration_sha256(),
-            "machines": {name: {**item.model_dump(), "workspace_write_effective": (item.local_access == "full_access") and (item.execution_enabled if item.workspace_write_enabled is None else item.workspace_write_enabled),
+            "machines": {name: {**item.model_dump(), "workspace_write_effective": item.local_access == "full_access" and item.workspace_write_enabled,
                                   "probe_status": "not_probed"} for name, item in self.config.machines.items()},
             "workspaces": {name: item.model_dump() for name, item in self.config.workspaces.items()},
             "skills": ["local-agent-tools"], "skill_roots": self.config.skills.roots, "task_continuity": True,
@@ -111,7 +110,6 @@ class Application:
                           "path_glob": {"recursive": False, "case_sensitive": True, "scope": "workspace_relative"},
                           "payload_bytes": MAX_TEXT_FILE, "change_record_bytes": workspace.MAX_RECORD,
                           "retained_change_ids": workspace.MAX_CHANGES, "result_bytes": workspace.MAX_WORKSPACE_RESULT},
-            "pid": os.getpid(),
             "limits": {"default_timeout_seconds": execution.DEFAULT_TIMEOUT, "max_timeout_seconds": execution.MAX_TIMEOUT, "max_read_bytes": execution.MAX_READ,
                        "max_execution_result_bytes": execution.MAX_RESULT_BYTES,
                        "log_bytes": execution.MAX_LOG, "log_retention": "rotating", "log_segments": 4, "log_segment_bytes": SEGMENT_BYTES,
@@ -435,10 +433,6 @@ class Application:
                                 validate_new=self._validate_task_scope)
         self.task_observer.notify()
         return tasks.present(view)
-
-    def rebuild_task_index(self, expected_generation: int = -1) -> dict:
-        with self._admit():
-            return tasks.rebuild_index(self.state, expected_generation)
 
     def start_codex_task(self, machine: str, execution_id: str, cwd: str, goal: str,
                          start_url: str, allowed_origins: list[str], mode: str = "browser", browser: str = "auto",

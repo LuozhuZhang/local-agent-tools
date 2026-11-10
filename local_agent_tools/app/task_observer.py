@@ -1,4 +1,4 @@
-"""Service-owned original receipt scheduling; threads and leases remain with one observer."""
+"""Server-owned original receipt scheduling; threads and leases remain with one observer."""
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -121,10 +121,8 @@ class TaskObserver:
     def _run(self) -> None:
         failure = None
         try:
-            # Like the listener lease, this is service bootstrap coordination,
-            # not task mutation authority. Activation may still hold admission
-            # while probing this server; every receipt dispatch and publication
-            # below waits for the original Application admission to become ready.
+            # One observer per state directory; this lease is coordination, not
+            # task mutation authority.
             private_directory(self.app.state)
             locks = private_directory(self.app.state / "locks")
             with lease(locks / "task-observer.lock"):
@@ -200,10 +198,9 @@ class TaskObserver:
             with self.app._admit():
                 pass
         except (Fault, OSError) as error:
+            # One shared check, not 32 task retries; an unsafe state directory stays blocked.
             self._admission_error = observation.error_code(error)
-            # One shared check, not 32 task retries. A live activation owns its
-            # completion; this observer never repairs or restarts the service.
-            self._admission_at = now + observation.INTERVAL_MS if self._admission_error in {"resource_busy", "activation_pending"} else records.MAX_INTEGER
+            self._admission_at = records.MAX_INTEGER
             return
         self._admission_error = None
         for identity in sorted(self._active, key=lambda key: (self._active[key], key)):
@@ -319,7 +316,7 @@ class TaskObserver:
             except (Fault, OSError) as error:
                 code = observation.error_code(error)
                 self._errors[identity] = code
-                if code in {"resource_busy", "task_store_busy", "activation_pending", "task_conflict"}:
+                if code in {"resource_busy", "task_store_busy", "task_conflict"}:
                     self._active[identity] = observation.now_ms() + observation.INTERVAL_MS
                 else:
                     # Unacknowledged/permanent publication cannot durably account

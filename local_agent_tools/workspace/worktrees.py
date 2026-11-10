@@ -78,9 +78,8 @@ def _canonical(path: Path, *, missing: bool = False) -> Path:
 
 
 def _authorized(config, machine: str, path: Path) -> bool:
-    if excluded(Path(*(part.casefold() for part in path.parts))):
-        return False
-    return config.machine(machine).local_access in {"read_only", "full_access"}
+    config.machine(machine)
+    return not excluded(Path(*(part.casefold() for part in path.parts)))
 
 
 def _creation_destination(path: Path) -> Path:
@@ -126,21 +125,6 @@ def _registered(root: Path) -> tuple[list[dict], bytes]:
 def registered_worktrees(root: Path) -> list[dict]:
     """Git's complete registration list for one repository top level."""
     return _registered(root)[0]
-
-
-def has_registered_worktrees(root: Path) -> bool:
-    """Detect other registered worktrees before removing a root's read grant."""
-    try:
-        resolved = root.resolve(strict=True)
-    except (OSError, RuntimeError) as error:
-        raise Fault("workspace_reference_unavailable", "The original workspace root is unavailable.") from error
-    observed = context(resolved)
-    if observed["git_status"] == "unavailable":
-        raise Fault("workspace_reference_unavailable", "The original repository could not be inspected.")
-    if observed["git_status"] != "observed" or observed["worktree"] != str(resolved):
-        return False
-    return any(item["worktree"] != str(resolved) and not item["prunable"] and not item["bare"]
-               for item in _registered(resolved)[0])
 
 
 def resolve_root(config, machine: str, workspace: str, worktree: str = "") -> Path:

@@ -1,11 +1,11 @@
-"""Strict om_patch_v1 parsing and original-byte preparation; no filesystem IO."""
+"""Strict patch_v1 parsing and original-byte preparation; no filesystem IO."""
 
 import unicodedata
 
 from local_agent_tools.foundation.files import MAX_TEXT_FILE, file_parts
 from local_agent_tools.foundation.sanitize import Fault
 
-LANGUAGE = "om_patch_v1"
+LANGUAGE = "patch_v1"
 MAX_PATHS = 32
 MAX_HUNKS = 64
 
@@ -51,7 +51,7 @@ def parse(text: str) -> list[dict]:
     if lines[-1] == b"":
         lines.pop()
     if len(lines) < 3 or lines[0] != b"*** Begin Patch" or lines[-1] != b"*** End Patch":
-        raise Fault("invalid_patch", "Use one nonempty om_patch_v1 document without fences or extra text.")
+        raise Fault("invalid_patch", "Use one nonempty patch_v1 document without fences or extra text.")
     operations, index, hunks = [], 1, 0
     headers = {b"*** Add File: ": "add", b"*** Update File: ": "update", b"*** Delete File: ": "delete"}
     while index < len(lines) - 1:

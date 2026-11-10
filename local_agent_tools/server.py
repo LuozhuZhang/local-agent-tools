@@ -18,7 +18,7 @@ from pydantic import ValidationError
 from local_agent_tools import __version__, skills
 from local_agent_tools.bootstrap import create_application
 from local_agent_tools.config import Settings
-from local_agent_tools.foundation.state import lease, private_directory
+from local_agent_tools.foundation.state import private_directory
 from local_agent_tools.mcp.protocol import READ, _reply, _result, MAX_WAITERS
 from local_agent_tools.mcp.workspace import register_workspace_tools
 from local_agent_tools.mcp.environment import register_environment_tools
@@ -160,7 +160,5 @@ def create_server(config: Settings, state: Path, *, application=None) -> MCPServ
 
 
 def serve(config: Settings, state: Path) -> None:
-    """One server per state directory; the client owns its lifetime through stdin."""
-    locks = private_directory(private_directory(state) / "locks")
-    with lease(locks / "server.lock"):
-        create_server(config, state).run(transport="stdio")
+    """The client owns this server's lifetime through stdin."""
+    create_server(config, private_directory(state)).run(transport="stdio")

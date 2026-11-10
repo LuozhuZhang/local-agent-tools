@@ -15,7 +15,7 @@ def stage_for(record: dict, identity: str | None = None) -> dict:
 
 def guards(record: dict, revision: int, plan_revision: int, epoch: int, *, allow_observations: bool = False) -> None:
     current = revision == record["revision"]
-    if allow_observations and record["format"] >= 4:
+    if allow_observations:
         current = record["control_revision"] <= revision <= record["revision"]
     if not current or (plan_revision, epoch) != (record["plan"]["revision"], record["control"]["epoch"]):
         raise version_conflict(record, revision, plan_revision, epoch)
@@ -73,8 +73,7 @@ def reserve(record: dict, *, operation_limit: int = MAX_ACTIVE_OPERATIONS - 2,
         raise Fault("task_capacity", "Active work capacity is reserved for original results and stopping; reconcile unresolved work before admitting more.")
     future = dict(new_operation, observed_at_ms=MAX_INTEGER, state="observed",
         result={"status": "cancelled", "receipt_sha256": "f" * 64, "summary": "x" * 256, "log_offset": MAX_INTEGER})
-    if record["format"] >= 4:
-        future["result"].update(failure_code="x" * 64, effect="effect_verified")
+    future["result"].update(failure_code="x" * 64, effect="effect_verified")
     try:
         Operation.model_validate(future)
     except ValueError as error:

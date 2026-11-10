@@ -5,7 +5,6 @@ import threading
 
 from local_agent_tools import execution, tasks, workspace
 from local_agent_tools.config import Settings
-from local_agent_tools.foundation.sanitize import Fault
 
 
 class Machines:
@@ -14,10 +13,7 @@ class Machines:
         self.state = state
 
     def _native_read(self, machine: str):
-        selected = self.config.machine(machine)
-        if selected.local_access is None:
-            raise Fault("local_approval_required", "Explicit Read Only or Full Access is required for native reads.")
-        return selected
+        return self.config.machine(machine)
 
     def inspect_environment(self, machine: str, workspace_name: str, section: str, worktree: str = "",
                             executables=None, ports=None, limit: int = 10) -> dict:

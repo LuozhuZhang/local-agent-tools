@@ -64,8 +64,7 @@ repeating the same ID after a missing reply returns the original recovery.
 Historical receipts without the native identity, a changed boot, unknown exit,
 live members, lost ownership or failed result verification remain unresolved.
 Do not infer cleanup from an empty output, exit zero, a clean checkout, or a free
-lock alone. Reads never perform or persist this recovery.  Service contract 20
-protects the new writer and retained recovery evidence across managed updates.
+lock alone. Reads never perform or persist this recovery.
 
 Output rotates through four 1 MiB segments without killing commands. Absolute raw
 byte cursors survive rotation; expired data reports `output_gap` and the oldest

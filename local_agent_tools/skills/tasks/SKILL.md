@@ -14,7 +14,7 @@ receipts remain authoritative. A record or read never creates execution authorit
 | Start new multi-stage work with continuity | [Create](create.md) |
 | Find/resume work, claim/renew/release, or wait | [Continue](continue.md) |
 | Observe original results and bounded observer errors | [Continue](continue.md#original-result-observation) |
-| Pause/cancel/resume, revise scope or bind historical effect scope | [Control](control.md) |
+| Pause/cancel/resume or revise scope | [Control](control.md) |
 | Accept stage evidence and explicitly finish | [Verify](verify.md) |
 | Repair derived lookup or continue legacy checkpoints | [Maintenance](maintenance.md) |
 

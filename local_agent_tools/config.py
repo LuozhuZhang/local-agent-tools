@@ -19,9 +19,9 @@ DEFAULT_STATE = Path.home() / ".local/state/local-agent-tools"
 class Machine(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     transport: Literal["local"]
-    local_access: Literal["read_only", "full_access"] | None = None
+    local_access: Literal["read_only", "full_access"]
     execution_enabled: bool = False
-    workspace_write_enabled: bool | None = None
+    workspace_write_enabled: bool = False
 
 
 class Workspace(BaseModel):
@@ -66,8 +66,6 @@ class Settings(BaseModel):
         if name not in self.machines:
             raise Fault("unknown_machine", "Select a machine returned by get_capabilities.")
         machine = self.machines[name]
-        if write and machine.local_access is None:
-            raise Fault("local_approval_required", "Explicitly select Read Only or Full Access; historical Workspace approval grants no permission.")
         if write and (not machine.execution_enabled or machine.local_access != "full_access"):
             raise Fault("execution_disabled", "The operator must explicitly enable this machine in configuration.")
         return machine
@@ -75,19 +73,12 @@ class Settings(BaseModel):
     def configuration_sha256(self) -> str:
         # Native mode is part of the effective grant and its configuration identity.
         value = self.model_dump()
-        for machine in value["machines"].values():
-            if machine["workspace_write_enabled"] is None:
-                del machine["workspace_write_enabled"]
         return hashlib.sha256(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
     def workspace_machine(self, name: str) -> Machine:
         machine = self.machine(name)
-        if machine.local_access is None:
-            raise Fault("local_approval_required", "Explicit local Full Access is required for native writes.")
         if machine.local_access == "read_only":
             raise Fault("workspace_write_disabled", "Whole-device Read Only does not authorize mutations.")
-        if machine.workspace_write_enabled is None:
-            return self.machine(name, write=True)
         if not machine.workspace_write_enabled:
             raise Fault("workspace_write_disabled", "Typed workspace writes are disabled for this machine.")
         return machine
@@ -99,7 +90,7 @@ def load(path: Path) -> Settings:
             return Settings.model_validate(tomllib.load(source))
     except (ValidationError, tomllib.TOMLDecodeError) as error:
         # Validation exceptions contain input values; do not print them.
-        raise Fault("invalid_config", "Check the schema, native permissions, absolute roots, machine references, and integration settings.") from error
+        raise Fault("invalid_config", "Check the schema, native permissions, absolute roots and machine references.") from error
     except OSError as error:
         raise Fault("config_unavailable", "Cannot read configuration; run init or select an existing --config file.") from error
 

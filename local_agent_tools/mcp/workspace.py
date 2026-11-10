@@ -91,7 +91,7 @@ def register_workspace_tools(application, guided_tool, machine_read, file_write)
                             task_context: tasks.TaskContext | None = None,
                             worktree: Annotated[str, Field(max_length=4096)] = "",
                             operation_scope: OperationScope | None = None) -> CallToolResult:
-        """Apply a strict om_patch_v1 plan with exact preconditions on every endpoint; empty hash means absence. Preview writes nothing and requires empty ID. Apply requires a caller-generated ID; identical retained requests never replay. Publication is ordered, not atomic. Partial/unknown outcomes require original-evidence readback, never automatic retry or rollback. File changes are not test results."""
+        """Apply a strict patch_v1 plan with exact preconditions on every endpoint; empty hash means absence. Preview writes nothing and requires empty ID. Apply requires a caller-generated ID; identical retained requests never replay. Publication is ordered, not atomic. Partial/unknown outcomes require original-evidence readback, never automatic retry or rollback. File changes are not test results."""
         operation = partial(_reply, lambda: application.apply_workspace_patch(machine, workspace_name, patch,
             expected_workspace_identity, expected_head_sha, [item.model_dump() for item in preconditions],
             create_parents, change_id, dry_run, expected_plan_sha256, _task_context(task_context), worktree,
