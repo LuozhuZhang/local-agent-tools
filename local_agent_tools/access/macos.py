@@ -241,6 +241,8 @@ def profile(*, readable: list[Path], writable: list[Path], private: Path, contro
     # Last, so no selected root, whatever its spelling, re-allows another execution's private home.
     lines.append(f"(deny file-read* file-read-data {WRITES} process-exec (require-all {_filters('subpath', [private_root()])} "
                  f"(require-not {_filters('subpath', [private])})))")
+    # Path walks such as `mkdir -p "$HOME/a"` stat the two directories above the private directory; nothing else.
+    lines.append(f"(allow file-read-metadata {_filters('literal', [private_root(), private.parent])})")
     lines.append(f"(deny file-read* file-read-data {WRITES} process-exec {_filters('subpath', control)})")
     return "\n".join(lines) + "\n"
 

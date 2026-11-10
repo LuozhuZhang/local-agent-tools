@@ -40,7 +40,7 @@ the contents of secret-named files (`.env*`, `*.key`, `*.p12`, `credentials*`,
 `id_rsa`, `.aws`/`.ssh` folders and similar) outside selected roots; a selected
 root re-allows reading inside those areas. The server's state, its default
 configuration directory and other executions' private homes stay unreachable
-whatever the roots. They may write
+to the command whatever the roots; typed tools check scope by path spelling. They may write
 only Full roots, their registered worktrees and a private per-execution `HOME`,
 `TMPDIR` and caches. `cwd` may be any readable directory. Git
 hooks/config/`commondir`, `.vscode`/`.idea`, agent sockets and other terminals stay

@@ -43,8 +43,8 @@ subcommand.
 
 The server speaks MCP over stdio; the client starts it. One server runs per state
 directory, and a second one on the same directory is refused, so give each client
-its own `--state-dir` under `~/.local/state/local-agent-tools/`, where scoped
-commands cannot reach it. Each state directory coordinates only itself: locks,
+its own `--state-dir` under `~/.local/state/local-agent-tools/clients/`, where
+scoped commands cannot reach it. Each state directory coordinates only itself: locks,
 resource leases, Tasks and receipts do not cover other clients, so give concurrent
 clients separate workspaces or worktrees.
 
@@ -53,7 +53,7 @@ clients separate workspaces or worktrees.
   "mcpServers": {
     "local-agent-tools": {
       "command": "/absolute/path/to/.venv/bin/local-agent-tools",
-      "args": ["--state-dir", "/Users/you/.local/state/local-agent-tools/this-client", "serve"]
+      "args": ["--state-dir", "/Users/you/.local/state/local-agent-tools/clients/this-client", "serve"]
     }
   }
 }
@@ -70,7 +70,8 @@ The tools act as your user account, not inside a sandbox:
   account can change, not only configured workspaces.
 - A call may carry an `operation_scope`, which confines that call's command under
   macOS Seatbelt and its file writes to the scoped Full roots; Linux refuses
-  scoped commands. The calling client chooses whether to send it, so it does not
+  scoped commands. Typed file tools check scope by path spelling, so another
+  spelling of the same place (such as `/System/Volumes/Data/...`) can pass them. The calling client chooses whether to send it, so it does not
   restrain an untrusted agent.
 - File contents and command output go to the client and its model provider;
   redaction is best effort.

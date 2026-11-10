@@ -149,7 +149,7 @@ class Scope:
         if any(_inside(path, item) for item in self.denied) and not any(_inside(path, item) for item in self.exceptions):
             return False
         # A directory holding a denied area or server state cannot be inspected as a whole.
-        return not any(_inside(item, path) for item in (*self.denied, *self.control))
+        return not any(_inside_any_case(item, path) for item in (*self.denied, *self.control, *self.hidden))
 
     def require(self, path: Path, *, write: bool = False) -> None:
         if not write:
