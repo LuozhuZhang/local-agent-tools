@@ -71,7 +71,6 @@ class Settings(BaseModel):
         return machine
 
     def configuration_sha256(self) -> str:
-        # Native mode is part of the effective grant and its configuration identity.
         value = self.model_dump()
         return hashlib.sha256(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
@@ -90,7 +89,7 @@ def load(path: Path) -> Settings:
             return Settings.model_validate(tomllib.load(source))
     except (ValidationError, tomllib.TOMLDecodeError) as error:
         # Validation exceptions contain input values; do not print them.
-        raise Fault("invalid_config", "Check the schema, native permissions, absolute roots and machine references.") from error
+        raise Fault("invalid_config", "Check the schema, machine grants, absolute roots and machine references.") from error
     except OSError as error:
         raise Fault("config_unavailable", "Cannot read configuration; run init or select an existing --config file.") from error
 
@@ -115,7 +114,10 @@ def initialize(path: Path, workspace: Path | None = None, *, commands: bool = Fa
     except (ValidationError, tomllib.TOMLDecodeError) as error:
         raise Fault("invalid_config", "First-run settings must contain a valid local workspace.") from error
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError as error:
+        raise Fault("config_exists", f"A configuration already exists at {path}; it is never overwritten.") from error
     with os.fdopen(fd, "w") as output:
         output.write(text)
         output.flush()

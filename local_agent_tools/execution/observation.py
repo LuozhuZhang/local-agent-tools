@@ -5,7 +5,6 @@ import heapq
 import os
 from pathlib import Path
 import re
-import subprocess
 import threading
 import time
 from typing import TYPE_CHECKING

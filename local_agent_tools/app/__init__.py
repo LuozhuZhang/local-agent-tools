@@ -29,7 +29,7 @@ MAX_TASK_RESULT_BYTES = 512 * 1024
 
 
 class Application:
-    def __init__(self, config: Settings, state: Path, machines: Machines, codex=None):
+    def __init__(self, config: Settings, state: Path, machines: Machines, codex):
         self.config = config
         self.state = state
         self.machines = machines
@@ -76,7 +76,7 @@ class Application:
                           "handoff_grace_seconds": task_attention.HANDOFF_GRACE_MS // 1000,
                           "attention_reasons": list(task_attention.ATTENTION_REASONS)},
                       "local_result_observation": True},
-            "codex": self.codex.capabilities(self.config) if self.codex is not None else None,
+            "codex": self.codex.capabilities(self.config),
             "transport": "stdio",
             "execution": {"receipt_format": execution.FORMAT, "worktree_receipt_format": execution.CREATION_FORMAT,
                           "io_modes": ["pipe", "pty"], "controls": sorted(execution.CONTROL_ACTIONS),
@@ -407,7 +407,7 @@ class Application:
 
     def create_task(self, task_id: str, update_id: str, title: str, anchors: list[str], origin: dict,
                     contract: dict, stages: list[dict], operation_scope: dict | None = None) -> dict:
-        # Pure input validation precedes lifecycle initialization; target reads hold no task lock.
+        # Pure input validation comes first; target reads hold no task lock.
         tasks.normalize_create({"task_id": task_id, "update_id": update_id, "title": title,
             "anchors": anchors, "origin": origin, "contract": contract, "stages": stages})
         if operation_scope is not None:
@@ -424,14 +424,10 @@ class Application:
         if operation_scope is not None:
             raise Fault("scope_unconfined_capability", "Codex/browser delegation cannot be confined to Selected "
                         "Projects; it needs explicit device Full Access.", effect="known_no_effect")
-        if self.codex is None:
-            raise Fault("codex_unavailable", "The Codex adapter is not assembled in this runtime.")
         return self.codex.start(self.config, self.state, self.start_execution, machine, execution_id, cwd,
             goal, start_url, allowed_origins, mode, browser, timeout_seconds, expected_head_sha, task_context)
 
     def read_codex_task(self, machine: str, execution_id: str) -> dict:
-        if self.codex is None:
-            raise Fault("codex_unavailable", "The Codex adapter is not assembled in this runtime.")
         return self.codex.read(self.config, self.state, self.read_execution, machine, execution_id)
 
     def start_execution(self, machine: str, execution_id: str, cwd: str, argv: list[str],

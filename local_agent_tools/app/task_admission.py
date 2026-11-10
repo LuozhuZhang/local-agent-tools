@@ -138,7 +138,7 @@ class TaskAdmission:
         return view
 
     def _check_abandon(self, record: dict) -> None:
-        """Only terminal uncertainty may be abandoned; original effect scopes survive."""
+        """Only terminal uncertainty may be abandoned; original operations stay unresolved."""
         unresolved = [item for item in record["operations"] if effects.unresolved(item)]
         if not unresolved:
             raise Fault("task_abandon_not_needed", "Use cancel when no original effect is unresolved.")

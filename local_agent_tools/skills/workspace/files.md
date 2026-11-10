@@ -183,10 +183,8 @@ writes to selected directories.
 
 No catalog call registers workspaces. A subfolder can remain bound to its parent,
 avoiding overlapping non-Git registrations. When an operation requires an
-independent workspace (notably a nested repository), use the existing locally
-approved candidate-configuration management update with its confirmation hashes
-and original receipt, then select the resulting workspace. A remote selection
-cannot approve an external discovery root or widen local grants.
+independent workspace (notably a nested repository), add it under `[workspaces]`
+in `config.toml`, restart the server, then select the new workspace.
 
 Limits: 50 rows per page, 2,000 raw directory entries per scan (including excluded
 entries), 1,024 UTF-8 path bytes, 32 relative components and 64 KiB JSON metadata.

@@ -134,9 +134,6 @@ def create_server(config: Settings, state: Path) -> MCPServer:
             return mcp.tool(annotations=annotations, structured_output=False)(handler)
         return register
 
-    private_directory(state)
-    private_directory(state / "locks")
-
     machine_read = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
     file_write = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False)
 

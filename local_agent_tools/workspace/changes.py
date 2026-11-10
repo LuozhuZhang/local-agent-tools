@@ -10,7 +10,6 @@ from local_agent_tools.foundation.sanitize import Fault
 from local_agent_tools.foundation.state import lease, private_directory
 from .files import MAX_SOURCE, digest, publish_file, publish_path, root_for, snapshot
 from .git import context, lock_root, writer_path_locks
-from .worktrees import resolve_root
 from . import change_records as records, change_schema as schema
 from . import preparation
 

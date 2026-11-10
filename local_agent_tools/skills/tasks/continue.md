@@ -161,7 +161,7 @@ permission to expand scope or repeat an uncertain effect.
 rejections retain current versions and add `expected`, `changed_fields` and a reason.
 `snapshot_changed` reports revision drift without attributing an
 owner change. `context_changed` identifies changed plan/epoch fields without
-identifying an actor. `observation_only=true` requires a proven format-4-or-later
+identifying an actor. `observation_only=true` requires a proven
 control-revision interval with unchanged plan and epoch; absent proof, stay neutral.
 Even proven observation drift does not relax exact control CAS. Read current
 state and original results, then recheck your retained claim and all existing
@@ -208,7 +208,7 @@ not provide out-of-band client notifications and cannot inject a message into a
 client that has already disconnected.
 
 Every persisted observation advances `revision` only when its content changes.
-Format 4 also records the last material `control_revision`. Business admission can
+Each Task also records the last material `control_revision`. Business admission can
 use an observed revision within that interval if plan, epoch, live ownership and
 all domain guards still match. Control transitions keep exact revision CAS;
 ownership, plan/scope, stop intent and new business admission invalidate earlier

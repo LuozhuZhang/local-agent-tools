@@ -63,7 +63,7 @@ def start(config: "Settings", state: Path, machine: str, execution_id: str, cwd:
           workspace_access: str = "exclusive", resource_keys: list[str] | None = None, task_id: str = "",
           termination_grace_seconds: float | None = None, tty: bool = False, terminal_size: dict | None = None,
           *, validate_new: Callable[[], object] | None = None, validate_effect=None, scope: dict | None = None) -> dict:
-    target = config.machine(machine, write=True)
+    config.machine(machine, write=True)
     keys = validate_start(cwd, argv, timeout_seconds, expected_head_sha, workspace_access, resource_keys, task_id,
                           termination_grace_seconds, tty, terminal_size)
     try:
@@ -97,8 +97,7 @@ def start(config: "Settings", state: Path, machine: str, execution_id: str, cwd:
 def create_worktree(config: "Settings", state: Path, machine: str, workspace_name: str,
                     destination: str, base_ref: str, new_branch: str, execution_id: str,
                     expected_workspace_identity: str, worktree: str = "", task_id: str = "",
-                    *, remote_worker: Path | None = None,
-                    validate_new: Callable[[], object] | None = None, validate_effect=None,
+                    *, validate_new: Callable[[], object] | None = None, validate_effect=None,
                     scope: dict | None = None) -> dict:
     """Create an optional checkout through the existing durable execution lifecycle."""
     before_admission = True
@@ -225,7 +224,6 @@ def _admit(config: "Settings", state: Path, machine: str, execution_id: str,
     """Admit once under the original ID lease; creation plans are internal only."""
     directory = record_directory(state, execution_id)
     locks = state / "locks"
-    timeout_seconds = request["timeout_seconds"]
     expected_head_sha = request["expected_head_sha"]
     workspace_access = request["workspace_access"]
     tty = request["tty"]
