@@ -301,13 +301,11 @@ class Handoff(Model):
 
 class Recovery(Model):
     episode_id: ID
-    category: Literal["local_observation", "runtime_readiness", "delivery", "claim"]
     started_at_ms: Integer
     deadline_ms: Integer
     attempts: Integer
     next_attempt_ms: Integer
     reason_code: Text128
-    connection_ref: Text256 | None
 
 
 class Acceptance(Model):

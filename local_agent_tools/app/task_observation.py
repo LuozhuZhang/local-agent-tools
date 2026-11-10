@@ -59,14 +59,12 @@ def fail_observation(record: dict, started: int, now: int, code: str) -> None:
     if record["terminal"] is not None or not pending(record):
         return
     recovery = record["recovery"]
-    if recovery is not None and recovery["category"] != "local_observation":
-        raise Fault("task_recovery_owner", "Receipt observation cannot replace another recovery owner.")
     if recovery is None:
         started = max(record["created_at_ms"], min(started, now))
         deadline = max(started, min(started + EPISODE_MS, record["contract"]["expires_at_ms"]))
         recovery = {"episode_id": records.digest([record["task_id"], started, "local_observation"])[:32],
-            "category": "local_observation", "started_at_ms": started, "deadline_ms": deadline,
-            "attempts": 1, "next_attempt_ms": deadline, "reason_code": code, "connection_ref": None}
+            "started_at_ms": started, "deadline_ms": deadline,
+            "attempts": 1, "next_attempt_ms": deadline, "reason_code": code}
         transitions.material(record, now, "recovery", f"Original receipt observation failed: {code}; original work retained.")
         record["recovery"] = recovery
     recovery["reason_code"] = code if code in TRANSIENT else "blocked_" + code
@@ -79,7 +77,7 @@ def fail_observation(record: dict, started: int, now: int, code: str) -> None:
 
 def clear_observation(record: dict) -> None:
     recovery = record["recovery"]
-    if recovery is not None and recovery["category"] == "local_observation":
+    if recovery is not None:
         record["recovery"] = None
         if record["control"]["state"] == "recovering":
             record["control"]["state"] = "running" if any(records.pending(item) for item in record["operations"]) else "waiting_for_ai"
@@ -109,7 +107,7 @@ def apply_observations(record: dict, now_ms: int, observations: list[tuple[str, 
     if not changed:
         return
     recovery = record["recovery"]
-    if recovery is not None and recovery["category"] == "local_observation" and not pending(record):
+    if recovery is not None and not pending(record):
         record["recovery"] = None
     control = record["control"]
     if control["stop_intent"] == "cancel" and not any(effects.unresolved(item) for item in record["operations"]):
@@ -141,7 +139,7 @@ def project(view: dict, snapshot: dict) -> dict:
         state, blocker = "retired", None
     elif not outstanding:
         state = "idle" if running else state
-    elif recovery is not None and recovery["category"] == "local_observation":
+    elif recovery is not None:
         if running:
             state = "blocked" if blocked(recovery, now) or blocker else "recovering"
         blocker = blocker or (recovery["reason_code"] if recovery["reason_code"].startswith("blocked_") else "observation_budget_exhausted" if blocked(recovery, now) else recovery["reason_code"])

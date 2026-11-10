@@ -112,8 +112,6 @@ def create_worktree(config: "Settings", state: Path, machine: str, workspace_nam
         intent = {"workspace": workspace_name, **worktrees.normalize_creation(
             destination, base_ref, new_branch, expected_workspace_identity, worktree)}
         target = config.machine(machine)
-        if target.transport != "local":
-            raise Fault("remote_path", "Use application routing for an execution on a remote machine.")
 
         def original_result():
             original = read_record(directory)["request"]
@@ -357,7 +355,7 @@ def check_workspace_leases(config, state: Path, *, scope: Path | None = None) ->
             selected = None
         else:
             related = [item for item in config.workspaces.values()
-                       if config.machine(item.machine).transport == "local" and cwd.is_relative_to(Path(item.root).resolve())]
+                       if cwd.is_relative_to(Path(item.root).resolve())]
             if not related:
                 continue
             if scope is not None and not any(
@@ -475,8 +473,7 @@ def control_execution(config: "Settings", state: Path, machine: str, execution_i
             expected_control_seq: int, action: str, text: str | None = None,
             terminal_size: dict | None = None) -> dict:
     request = control_request(expected_control_seq, action, text, terminal_size)
-    if config.machine(machine, write=action in {"write_stdin", "resize"}).transport != "local":
-        raise Fault("remote_path", "Use application routing for a remote control.")
+    config.machine(machine, write=action in {"write_stdin", "resize"})
     directory = record_directory(state, execution_id)
     record, status = observation.receipt(directory, machine, wait=False, deadline=time.monotonic() + observation.MAX_WAIT)
     previous = controls.retained(record, status, request)

@@ -1,6 +1,6 @@
 """Explicit local tools served to one MCP client over stdio."""
 
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from contextvars import ContextVar
 from functools import wraps
 import asyncio
@@ -18,7 +18,8 @@ from pydantic import ValidationError
 from local_agent_tools import __version__, skills
 from local_agent_tools.bootstrap import create_application
 from local_agent_tools.config import Settings
-from local_agent_tools.foundation.state import private_directory
+from local_agent_tools.foundation.sanitize import Fault
+from local_agent_tools.foundation.state import lease, private_directory
 from local_agent_tools.mcp.protocol import READ, _reply, _result, MAX_WAITERS
 from local_agent_tools.mcp.workspace import register_workspace_tools
 from local_agent_tools.mcp.environment import register_environment_tools
@@ -27,8 +28,8 @@ from local_agent_tools.mcp.tasks import register_task_tools
 from local_agent_tools.mcp.execution import register_execution_tools
 
 
-def create_server(config: Settings, state: Path, *, application=None) -> MCPServer:
-    application = application if application is not None else create_application(config, state)
+def create_server(config: Settings, state: Path) -> MCPServer:
+    application = create_application(config, state)
     waiting = threading.BoundedSemaphore(MAX_WAITERS)
 
     @asynccontextmanager
@@ -160,5 +161,15 @@ def create_server(config: Settings, state: Path, *, application=None) -> MCPServ
 
 
 def serve(config: Settings, state: Path) -> None:
-    """The client owns this server's lifetime through stdin."""
-    create_server(config, private_directory(state)).run(transport="stdio")
+    """One server per state directory: its Task observer is the only one there. The client owns
+    this server's lifetime through stdin."""
+    state = private_directory(state)
+    with ExitStack() as held:
+        try:
+            held.enter_context(lease(private_directory(state / "locks") / "server.lock"))
+        except Fault as error:
+            if error.code != "resource_busy":
+                raise
+            raise Fault("state_in_use", "Another local-agent-tools server is using this state directory; "
+                        "give each client its own --state-dir.") from error
+        create_server(config, state).run(transport="stdio")

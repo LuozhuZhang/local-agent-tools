@@ -88,8 +88,7 @@ def read(config: "Settings", state: Path, machine: str, execution_id: str,
          offset: int = 0, max_bytes: int = MAX_READ, wait_seconds: float = 0,
          *, cancelled: threading.Event | None = None) -> dict:
     validate_read(offset, max_bytes, wait_seconds)
-    if config.machine(machine).transport != "local":
-        raise Fault("remote_path", "Use application routing for an execution on a remote machine.")
+    config.machine(machine)
     directory = record_directory(state, execution_id)
     cancelled = cancelled if cancelled is not None else threading.Event()
     started = time.monotonic()
@@ -127,8 +126,7 @@ def read(config: "Settings", state: Path, machine: str, execution_id: str,
 
 def list_records(config: "Settings", state: Path, machine: str, cursor: str = "", limit: int = 20) -> dict:
     """Page stable IDs, not guessed logical tasks; inspect at most limit receipts."""
-    if config.machine(machine).transport != "local":
-        raise Fault("remote_path", "Use application routing for an execution on a remote machine.")
+    config.machine(machine)
     if cursor:
         record_directory(state, cursor)
     if not 1 <= limit <= 100:

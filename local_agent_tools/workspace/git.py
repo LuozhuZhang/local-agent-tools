@@ -90,7 +90,7 @@ def context(cwd: Path) -> dict:
 def whole_device_writes(config) -> bool:
     """One local Full grant makes every non-Git local alias share the global lease."""
     return any(
-        m.transport == "local" and m.local_access == "full_access" for m in config.machines.values())
+        m.local_access == "full_access" for m in config.machines.values())
 
 
 def writable_target(cwd: Path) -> dict:
@@ -126,8 +126,7 @@ def lock_root(config, machine: str, cwd: Path, observed: dict) -> str:
         return "/"
     roots = set()
     for item in config.workspaces.values():
-        if config.machine(item.machine).transport == "local":
-            roots.add(Path(item.root).resolve())
+        roots.add(Path(item.root).resolve())
     candidates = [root for root in roots if cwd.is_relative_to(root)]
     if len(candidates) != 1:
         raise Fault("ambiguous_workspace", "Select one unambiguous configured non-Git root.")

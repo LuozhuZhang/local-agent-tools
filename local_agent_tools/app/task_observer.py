@@ -7,7 +7,6 @@ import time
 from local_agent_tools import tasks
 from local_agent_tools.foundation.sanitize import Fault
 from local_agent_tools.foundation.state import lease, private_directory
-from local_agent_tools.tasks import records
 from . import task_observation as observation, task_receipts
 
 
@@ -46,8 +45,6 @@ class TaskObserver:
         self._reads: dict[str, _Read] = {}
         self._discover_at = 0
         self._discovery_error = None
-        self._admission_at = 0
-        self._admission_error = None
 
     @contextmanager
     def running(self):
@@ -68,8 +65,6 @@ class TaskObserver:
             self._last.clear()
             self._errors.clear()
             self._discovery_error = None
-            self._admission_at = 0
-            self._admission_error = None
             self._snapshot = dict(self._snapshot, state="starting", blocker=None)
             self._sequence += 1
             self._condition.notify_all()
@@ -108,7 +103,7 @@ class TaskObserver:
 
     def _status(self, state: str, blocker: str | None = None) -> None:
         with self._condition:
-            value = {"state": state, "observed_at_ms": observation.now_ms(), "blocker": blocker or self._admission_error,
+            value = {"state": state, "observed_at_ms": observation.now_ms(), "blocker": blocker,
                 "active": dict(self._active), "last": dict(self._last), "errors": dict(self._errors),
 }
             changed = any(value.get(key) != self._snapshot.get(key)
@@ -192,17 +187,8 @@ class TaskObserver:
             self._dirty.clear()
         if dirty or now >= self._discover_at:
             self._discover(now)
-        if now < self._admission_at or not any(key not in self._reads and due <= now for key, due in self._active.items()):
+        if not any(key not in self._reads and due <= now for key, due in self._active.items()):
             return
-        try:
-            with self.app._admit():
-                pass
-        except (Fault, OSError) as error:
-            # One shared check, not 32 task retries; an unsafe state directory stays blocked.
-            self._admission_error = observation.error_code(error)
-            self._admission_at = records.MAX_INTEGER
-            return
-        self._admission_error = None
         for identity in sorted(self._active, key=lambda key: (self._active[key], key)):
             if self._stop.is_set():
                 break
@@ -219,11 +205,6 @@ class TaskObserver:
                     continue
                 recovery = record["recovery"]
                 if recovery is not None:
-                    if recovery["category"] != "local_observation":
-                        self._errors[identity] = "task_recovery_owner"
-                        self._active.pop(identity, None)
-                        continue
-                if recovery is not None:
                     if observation.blocked(recovery, now):
                         self._errors[identity] = recovery["reason_code"] if recovery["reason_code"].startswith("blocked_") else "observation_budget_exhausted"
                         self._active.pop(identity, None)
@@ -239,8 +220,7 @@ class TaskObserver:
                         # Durable crash fallback before this retry actually reads.
                         current["next_attempt_ms"] = min(timestamp + int(observation.READ_SECONDS * 1000)
                             + observation.delay(current["attempts"]), current["deadline_ms"])
-                    with self.app._admit():
-                        view = tasks.update(self.app.state, identity, reserve, expected_revision=record["revision"], observation=True)
+                    view = tasks.update(self.app.state, identity, reserve, expected_revision=record["revision"], observation=True)
                     record = view["record"]
                 read = _Read(record, now, expected_revision=record["revision"])
                 read.thread = threading.Thread(target=self._read, args=(read,), name="task-read", daemon=True)
@@ -284,11 +264,10 @@ class TaskObserver:
                 observation.fail_observation(record, read.started_at_ms, timestamp, code)
             else:
                 observation.clear_observation(record)
-        with self.app._admit():
-            if self._stop.is_set():
-                return
-            view = tasks.update(self.app.state, identity, apply, expected_revision=read.expected_revision,
-                observation=True, operation_ids=tuple(item[0] for item in read.observations))
+        if self._stop.is_set():
+            return
+        view = tasks.update(self.app.state, identity, apply, expected_revision=read.expected_revision,
+            observation=True, operation_ids=tuple(item[0] for item in read.observations))
         # Updating this CAS guard only follows our own verified publication. A
         # pause/decision/foreground result produces a conflict instead of overwrite.
         read.expected_revision = view["record"]["revision"]

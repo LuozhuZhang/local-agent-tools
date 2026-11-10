@@ -157,8 +157,7 @@ def inspect(config: "Settings", machine: str, workspace_name: str = "", action: 
             path: str = ".", offset: int = 0, limit: int = MAX_PAGE,
             expected_snapshot: str = "", expected_target_id: str = "") -> dict:
     """Resolve the Desktop root, list direct child directories, or inspect/revalidate one target."""
-    if config.machine(machine).transport != "local":
-        raise Fault("unsupported_operation", "Project catalog protocol 2 supports local machines only.")
+    config.machine(machine)
     if (not isinstance(action, str) or action not in {"root", "list", "inspect"} or not isinstance(workspace_name, str)
             or not all(isinstance(value, str) and re.fullmatch(r"(?:[0-9a-f]{64})?", value)
                        for value in (expected_snapshot, expected_target_id))):

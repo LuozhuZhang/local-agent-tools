@@ -8,7 +8,7 @@ from pathlib import Path, PurePosixPath
 
 from local_agent_tools import execution, tasks, workspace
 from local_agent_tools.foundation.sanitize import Fault, PRE_EFFECT_REQUEST_FAILURES
-from local_agent_tools.foundation.state import lease
+from local_agent_tools.foundation.state import lease, private_directory
 from local_agent_tools.tasks import effects, records, transitions
 from . import task_attention, task_observation, task_receipts
 
@@ -281,10 +281,11 @@ class TaskAdmission:
         names = {"task-effect-" + records.digest(list(key))}
         if context is not None:
             names.add("task-operation-" + context["operation_id"])
+        directory = private_directory(private_directory(self.app.state) / "locks")
         with ExitStack() as locks:
             try:
                 for name in sorted(names):
-                    locks.enter_context(lease(self.app.state / "locks" / (name + ".lock")))
+                    locks.enter_context(lease(directory / (name + ".lock")))
             except Fault as error:
                 if error.code != "resource_busy" or context is not None or method not in FILE_METHODS | EXECUTION_METHODS:
                     raise

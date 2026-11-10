@@ -101,7 +101,7 @@ def request(value: dict) -> dict:
 
 def capabilities(config) -> dict:
     # Passive metadata: no binary launch, browser contact, config or credential read.
-    return {"enabled": any(m.transport == "local" and m.execution_enabled for m in config.machines.values()),
+    return {"enabled": any(m.execution_enabled for m in config.machines.values()),
             "modes": ["browser"], "computer": False, "availability": "not_probed", "max_seconds": MAX_SECONDS}
 
 
@@ -217,8 +217,7 @@ def _original(state: Path, identity: str) -> tuple[Path, dict, dict]:
 def start(config, state: Path, launch, machine: str, execution_id: str, cwd: str,
           goal: str, start_url: str, allowed_origins: list[str], mode="browser", browser="auto",
           timeout_seconds=600, expected_head_sha="", task_context=None) -> dict:
-    if config.machine(machine, write=True).transport != "local":
-        raise Fault("codex_local_only", "Browser delegation uses a configured local machine, never a controller-side remote fallback.")
+    config.machine(machine, write=True)
     try:
         packet = request(dict(execution_id=execution_id, goal=goal, mode=mode, start_url=start_url,
                               allowed_origins=allowed_origins, browser=browser))
@@ -260,8 +259,7 @@ def validate_report(report: Report, evidence: dict, packet: dict):
 
 
 def read(config, state: Path, observe, machine: str, execution_id: str) -> dict:
-    if config.machine(machine).transport != "local":
-        raise Fault("codex_local_only", "Read the original local Codex execution on its owning machine.")
+    config.machine(machine)
     result = observe(machine, execution_id, max_bytes=1)
     job, record, packet = _original(state, execution_id)
     if record["request"]["machine"] != machine:

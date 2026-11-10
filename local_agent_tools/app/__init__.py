@@ -1,8 +1,6 @@
-"""Typed application operations; every mutation shares one lifecycle admission."""
+"""Typed application operations over the configured machines and private state."""
 
-from collections.abc import Iterator
 import json
-from contextlib import contextmanager
 from pathlib import Path
 import threading
 import time
@@ -14,7 +12,6 @@ from local_agent_tools.config import Settings
 from local_agent_tools.execution import DEFAULT_TIMEOUT, MAX_TIMEOUT, MAX_WAIT, MAX_WAITERS, MAX_RESULT_BYTES, SEGMENT_BYTES, bound_output, MAX_CONTROL_SEQ, MAX_INPUT
 from local_agent_tools.foundation.files import MAX_SCAN_ENTRIES, MAX_TEXT_FILE, TEXT_PAGE
 from local_agent_tools.foundation.sanitize import Fault
-from local_agent_tools.foundation.state import private_directory
 
 from local_agent_tools.access import rules as scopes
 from . import environment, task_attention
@@ -40,13 +37,6 @@ class Application:
         self.task_receipts = TaskReceipts(state, config, machines)
         self.task_admission = TaskAdmission(self)
         self.task_observer = TaskObserver(self)
-
-    @contextmanager
-    def _admit(self) -> Iterator[None]:
-        """Prepare the private state directories every mutation writes under."""
-        private_directory(self.state)
-        private_directory(self.state / "locks")
-        yield
 
     def _scope(self, machine: str, value: dict | None):
         return None if value is None else scopes.compile(self.config, self.state, machine, value)
@@ -169,11 +159,10 @@ class Application:
                              worktree: str = "", operation_scope: dict | None = None) -> dict:
         if (scope := self._scope(machine, operation_scope)) is not None:
             self._require_target(scope, machine, workspace_name, [path], worktree, write=True)
-        with self._admit():
-            return self.task_admission.run("write_workspace_file", dict(machine=machine, workspace_name=workspace_name,
-                path=path, content=content, expected_head_sha=expected_head_sha, expected_sha256=expected_sha256,
-                change_id=change_id, expected_workspace_identity=expected_workspace_identity,
-                **({"worktree": worktree} if worktree else {})), task_context)
+        return self.task_admission.run("write_workspace_file", dict(machine=machine, workspace_name=workspace_name,
+            path=path, content=content, expected_head_sha=expected_head_sha, expected_sha256=expected_sha256,
+            change_id=change_id, expected_workspace_identity=expected_workspace_identity,
+            **({"worktree": worktree} if worktree else {})), task_context)
 
     def edit_workspace_file(self, machine: str, workspace_name: str, path: str, edits: list[dict],
                             expected_workspace_identity: str, expected_head_sha: str, expected_sha256: str,
@@ -188,8 +177,7 @@ class Application:
             **({"worktree": worktree} if worktree else {}))
         if dry_run is True:
             return self.machines.edit_workspace_file(**arguments)
-        with self._admit():
-            return self.task_admission.run("edit_workspace_file", arguments, task_context)
+        return self.task_admission.run("edit_workspace_file", arguments, task_context)
 
     def apply_workspace_patch(self, machine: str, workspace_name: str, patch: str,
                               expected_workspace_identity: str, expected_head_sha: str, preconditions: list[dict],
@@ -205,8 +193,7 @@ class Application:
             expected_plan_sha256=expected_plan_sha256, **({"worktree": worktree} if worktree else {}))
         if dry_run is True:
             return self.machines.apply_workspace_patch(**arguments)
-        with self._admit():
-            return self.task_admission.run("apply_workspace_patch", arguments, task_context)
+        return self.task_admission.run("apply_workspace_patch", arguments, task_context)
 
     def read_workspace_change(self, machine: str, change_id: str, observe_current: bool = False) -> dict:
         return self.machines.read_workspace_change(machine, change_id, observe_current)
@@ -234,8 +221,7 @@ class Application:
                          base_ref=base_ref, new_branch=new_branch, execution_id=execution_id,
                          expected_workspace_identity=expected_workspace_identity, task_id="",
                          **({"worktree": worktree} if worktree else {}))
-        with self._admit():
-            result = self.task_admission.run("create_worktree", arguments, task_context, scope=request)
+        result = self.task_admission.run("create_worktree", arguments, task_context, scope=request)
         return self._execution_task_feedback(machine, result)
 
     def find_tasks(self, query: str = "", anchors: list[str] | None = None, task_id: str = "", offset: int = 0,
@@ -366,8 +352,7 @@ class Application:
 
     def save_task(self, task_id: str, expected_revision: int, title: str, body: str,
                   anchors: list[str] | None = None) -> dict:
-        with self._admit():
-            return tasks.save(self.state, task_id, expected_revision, title, body, anchors or [])
+        return tasks.save(self.state, task_id, expected_revision, title, body, anchors or [])
 
     def control_task(self, task_id: str, expected_revision: int, expected_plan_revision: int,
                      expected_epoch: int, update_id: str, transition: dict, operation_scope: dict | None = None) -> dict:
@@ -376,8 +361,7 @@ class Application:
             update_id=update_id, transition=transition))
         if operation_scope is not None and isinstance(request["transition"].get("contract"), dict):
             self._require_task_targets(request["transition"]["contract"], operation_scope)
-        with self._admit():
-            view = self.task_admission.control(request)
+        view = self.task_admission.control(request)
         self.task_observer.notify()
         return tasks.present(view)
 
@@ -428,9 +412,8 @@ class Application:
             "anchors": anchors, "origin": origin, "contract": contract, "stages": stages})
         if operation_scope is not None:
             self._require_task_targets(contract, operation_scope)
-        with self._admit():
-            view = tasks.create(self.state, task_id, update_id, title, anchors, origin, contract, stages,
-                                validate_new=self._validate_task_scope)
+        view = tasks.create(self.state, task_id, update_id, title, anchors, origin, contract, stages,
+                            validate_new=self._validate_task_scope)
         self.task_observer.notify()
         return tasks.present(view)
 
@@ -466,12 +449,11 @@ class Application:
                 raise Fault("path_out_of_scope", "Use an existing readable directory as cwd.", effect="known_no_effect") from error
             scope.require(working)
             request = scope.process_request()
-        with self._admit():
-            result = self.task_admission.run("start_execution", dict(machine=machine, execution_id=execution_id,
-                cwd=cwd, argv=argv, timeout_seconds=timeout_seconds, expected_head_sha=expected_head_sha,
-                workspace_access=workspace_access, resource_keys=resource_keys, task_id=task_id,
-                termination_grace_seconds=termination_grace_seconds, tty=tty, terminal_size=terminal_size),
-                task_context, scope=request)
+        result = self.task_admission.run("start_execution", dict(machine=machine, execution_id=execution_id,
+            cwd=cwd, argv=argv, timeout_seconds=timeout_seconds, expected_head_sha=expected_head_sha,
+            workspace_access=workspace_access, resource_keys=resource_keys, task_id=task_id,
+            termination_grace_seconds=termination_grace_seconds, tty=tty, terminal_size=terminal_size),
+            task_context, scope=request)
         return self._execution_task_feedback(machine, result)
 
     def _execution_task_feedback(self, machine: str, result: dict) -> dict:
@@ -506,17 +488,14 @@ class Application:
         return self.machines.list_executions(machine, cursor, limit)
 
     def cancel_execution(self, machine: str, execution_id: str, task_context: dict | None = None) -> dict:
-        with self._admit():
-            return self.task_admission.run("cancel_execution", dict(machine=machine, execution_id=execution_id), task_context)
+        return self.task_admission.run("cancel_execution", dict(machine=machine, execution_id=execution_id), task_context)
 
     def reconcile_execution(self, machine: str, execution_id: str) -> dict:
-        with self._admit():
-            result = execution.reconcile(self.config, self.state, machine, execution_id)
+        result = execution.reconcile(self.config, self.state, machine, execution_id)
         return self._execution_task_feedback(machine, result)
 
     def control_execution(self, machine: str, execution_id: str, expected_control_seq: int,
                           action: Literal["write_stdin", "interrupt", "resize"], text: str | None = None,
                           terminal_size: dict | None = None, task_context: dict | None = None) -> dict:
-        with self._admit():
-            return self.task_admission.run("control_execution", dict(machine=machine, execution_id=execution_id,
-                expected_control_seq=expected_control_seq, action=action, text=text, terminal_size=terminal_size), task_context)
+        return self.task_admission.run("control_execution", dict(machine=machine, execution_id=execution_id,
+            expected_control_seq=expected_control_seq, action=action, text=text, terminal_size=terminal_size), task_context)

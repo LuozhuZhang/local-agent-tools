@@ -77,9 +77,9 @@ class TaskReceipts:
         # local start rejection and its original free launch lock can do so.
         locator = operation["locator"]
         if (locator["kind"] != "execution" or locator["control_seq"] is not None
-                or operation["id"] != locator["execution_id"]
-                or self.config.machine(locator["machine"]).transport != "local"):
+                or operation["id"] != locator["execution_id"]):
             return False
+        self.config.machine(locator["machine"])
         identity = locator["execution_id"]
         try:
             with lease(self.state / "locks" / f"{identity}.lock", create=False):

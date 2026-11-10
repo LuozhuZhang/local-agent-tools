@@ -14,7 +14,6 @@ check. Repeating any retained identical update ID observes history rather than r
 | `claim`, `renew`, `release` | [Continuation ownership](continue.md#claim-renew-and-release) |
 | `pause`, `cancel`, `abandon`, `resume`, `revise_plan` | Admission and plan rules below |
 | `record_decision`, `finish` | [Verify stages and finish](verify.md) |
-| `bind_effect_scope` | Historical effect scope below |
 
 ## Admission and outstanding effects
 

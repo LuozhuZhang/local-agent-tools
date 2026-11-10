@@ -122,12 +122,12 @@ def _runtime(app, machine: str) -> dict:
     caps = app.get_capabilities()
     selected = caps["machines"][machine]
     return _section(_ref("get_capabilities"), "configuration_not_health", data={
-        "controller": {key: caps.get(key) for key in ("version", "commit", "configuration_sha256", "transport")},
+        "controller": {key: caps.get(key) for key in ("version", "configuration_sha256", "transport")},
         "selected_machine": {key: selected.get(key) for key in ("transport", "execution_enabled",
             "workspace_write_effective", "probe_status")},
         "execution": caps["execution"], "limits": caps["limits"], "boundary": caps["boundary"]},
         limitations=("Configured support and grants are not live backend health or permission for this request.",
-                     "Controller version/limits are not remote worker or command-process measurements."))
+                     "Server version/limits are not command-process measurements."))
 
 
 def _target_section(app, selection: dict, context: dict, section: str, executables: list[str], ports: list[int], limit: int) -> dict:

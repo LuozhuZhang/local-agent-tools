@@ -18,7 +18,7 @@ identity. From a local checkout:
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.lock
-.venv/bin/python -m pip install --no-deps .
+.venv/bin/python -m pip install --no-deps --no-build-isolation .
 ```
 
 Use `requirements.lock` as the complete dependency source. Workers use the
@@ -49,12 +49,14 @@ configuration change. Unknown fields are rejected, not ignored.
 
 `serve` speaks MCP over stdin and stdout. It opens no network port and installs
 no OS service; each running command has a private Unix control socket under the
-state directory. Several servers may share one state directory; only one of them
-runs the background Task observer.
+state directory. One server runs per state directory, because its background
+Task observer must be the only one there; a second server on the same directory is
+refused. Give each MCP client its own `--state-dir`.
 
 ## Connect a client
 
-The MCP client starts the server as a stdio subprocess and owns its lifetime.
+The MCP client starts the server as a stdio subprocess and owns its lifetime, for
+example `local-agent-tools --state-dir /absolute/state/for-this-client serve`.
 Any MCP client works; the server does not depend on a particular client or model
 provider. A completed handshake is not proof that the client approved every tool.
 

@@ -17,6 +17,6 @@ def register_project_tools(application, guided_tool):
                          limit: Annotated[int, Field(strict=True, ge=1, le=50)] = 50,
                          expected_snapshot: Annotated[str, Field(pattern=r"^(?:[0-9a-f]{64})?$")] = "",
                          expected_target_id: Annotated[str, Field(pattern=r"^(?:[0-9a-f]{64})?$")] = "") -> CallToolResult:
-        """Discover directories without contents. root returns this account's Desktop; list returns direct child directory names of an explicit directory, with no Git or content probe; inspect one directory to obtain its target_id and echo it as expected_target_id to revalidate. IDs exclude branch/HEAD and grant no access. Echo snapshot when paging. No SSH fallback, recursive scan, configuration writes or automatic registration."""
+        """Discover directories without contents. root returns this account's Desktop; list returns direct child directory names of an explicit directory, with no Git or content probe; inspect one directory to obtain its target_id and echo it as expected_target_id to revalidate. IDs exclude branch/HEAD and grant no access. Echo snapshot when paging. No recursive scan, configuration writes or automatic registration."""
         return _reply(lambda: application.inspect_projects(machine, workspace_name, action, path, offset,
                                                            limit, expected_snapshot, expected_target_id))

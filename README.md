@@ -14,7 +14,7 @@ Python 3.12 or newer on macOS or Linux, with Git. From a local checkout:
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.lock
-.venv/bin/python -m pip install --no-deps .
+.venv/bin/python -m pip install --no-deps --no-build-isolation .
 ```
 
 Tasks are stored in SQLite and need SQLite 3.51.3 or newer, or a patched 3.50.7+
@@ -40,14 +40,16 @@ subcommand.
 
 ## Use with an MCP client
 
-The server speaks MCP over stdio; the client starts it:
+The server speaks MCP over stdio; the client starts it. One server runs per state
+directory, and a second one on the same directory is refused, so give each client
+its own `--state-dir`:
 
 ```json
 {
   "mcpServers": {
     "local-agent-tools": {
       "command": "/absolute/path/to/.venv/bin/local-agent-tools",
-      "args": ["serve"]
+      "args": ["--state-dir", "/absolute/path/to/state/for-this-client", "serve"]
     }
   }
 }

@@ -38,7 +38,7 @@ def register_workspace_tools(application, guided_tool, machine_read, file_write)
                             line_count: Annotated[int, Field(strict=True, ge=1, le=500)] = 200,
                             worktree: Annotated[str, Field(max_length=4096)] = "",
                             operation_scope: OperationScope | None = None) -> CallToolResult:
-        """Read bounded UTF-8 source with whole-file SHA256/context and 32 KiB pages. start_line is 1-based and requires offset=0. Continue long lines using next_offset and the same SHA; next_line exists only at a known boundary. Heed range_complete/has_more and redaction metadata; never reconstruct full files from partial/redacted pages. SSH reads stay on the pinned target."""
+        """Read bounded UTF-8 source with whole-file SHA256/context and 32 KiB pages. start_line is 1-based and requires offset=0. Continue long lines using next_offset and the same SHA; next_line exists only at a known boundary. Heed range_complete/has_more and redaction metadata; never reconstruct full files from partial/redacted pages."""
         return _reply(lambda: application.read_workspace_file(machine, workspace_name, path, offset, expected_sha256, start_line, line_count, worktree,
             operation_scope=_operation_scope(operation_scope)), workspace_output=True)
 
