@@ -43,7 +43,9 @@ subcommand.
 
 The server speaks MCP over stdio; the client starts it. One server runs per state
 directory, and a second one on the same directory is refused, so give each client
-its own `--state-dir`:
+its own `--state-dir`. Each state directory coordinates only itself: locks, Tasks
+and receipts do not cover other clients, so give concurrent clients separate
+workspaces or worktrees.
 
 ```json
 {

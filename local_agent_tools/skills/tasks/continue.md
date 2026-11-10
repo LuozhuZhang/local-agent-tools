@@ -27,10 +27,10 @@ include state, declared targets, bounded native operation-machine references,
 owning Task-store identity and available timestamps. Follow `next_offset` only
 with `expected_generation`; `task_index_changed` requires restarting at zero.
 
-`read_task_receipts(task_id, expected_revision, operation_ids)` is a bounded, passive reader for 1–8 exact local Execution/Change operations on the same Task revision. It returns complete original receipts under the Task's current store identity; callers must still check current permission, directory/provider scope, and fresh Task revision before protected result release. Changed, missing, conflicting or oversized evidence fails closed. No result can be inferred from an absent receipt; never replay an original effect.
+`read_task_receipts(task_id, expected_revision, operation_ids)` is a bounded, passive reader for 1–8 exact local Execution/Change operations on the same Task revision. It returns complete original receipts under the Task's current store identity; callers must still check current permission, directory scope and fresh Task revision before using them. Changed, missing, conflicting or oversized evidence fails closed. No result can be inferred from an absent receipt; never replay an original effect.
 
-This batch reader is optional in some client-approved catalogs even when native
-the server implements it. If it is not exposed, use `read_task(section="operations",
+This batch reader is optional in some client-approved catalogs even when the
+server implements it. If it is not exposed, use `read_task(section="operations",
 operation_id=...)` and the exact original `read_execution` or
 `read_workspace_change` where available. Separate reads do not provide the
 batch reader's stable-revision guarantee; preserve their coverage limits and
@@ -47,8 +47,9 @@ cursors keep their original watermark. Never infer no unknowns from one page.
 
 ## Original-result observation
 
-The server observer collects previously admitted native command, control,
-cancel and change receipts without a connected client. Bounded observation
+The server's observer collects previously admitted native command, control,
+cancel and change receipts while a server runs on that state directory, and
+resumes when the next server starts. Bounded observation
 faults and retry budgets appear in read_task. Results and handoffs are observed,
 never replayed, automatically accepted or used to authorize new effects.
 

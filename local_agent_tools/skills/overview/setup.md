@@ -36,7 +36,6 @@ Start with an existing disposable workspace; replace the example path:
 
 ```sh
 .venv/bin/local-agent-tools init --workspace /absolute/path/to/disposable-project
-.venv/bin/local-agent-tools serve
 ```
 
 Default configuration: `~/.config/local-agent-tools/config.toml`. Private state:
@@ -51,7 +50,10 @@ configuration change. Unknown fields are rejected, not ignored.
 no OS service; each running command has a private Unix control socket under the
 state directory. One server runs per state directory, because its background
 Task observer must be the only one there; a second server on the same directory is
-refused. Give each MCP client its own `--state-dir`.
+refused. Give each MCP client its own `--state-dir`. Each state directory
+coordinates only itself: workspace leases, writer locks, Task reservations and
+change records do not cover other clients, so give concurrent clients separate
+workspaces or worktrees.
 
 ## Connect a client
 
