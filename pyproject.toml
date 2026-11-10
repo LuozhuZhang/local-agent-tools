@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "local-agent-tools"
+dynamic = ["version"]
+description = "Experimental local MCP server for operating this machine over stdio."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = ["mcp==2.2.0", "jsonschema==4.26.0", "pydantic==2.13.5", "PyYAML==6.0.3"]
+
+[project.scripts]
+local-agent-tools = "local_agent_tools.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["local_agent_tools"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/local_agent_tools", "/pyproject.toml", "/README.md", "/LICENSE"]
+
+[tool.hatch.version]
+path = "local_agent_tools/__init__.py"
