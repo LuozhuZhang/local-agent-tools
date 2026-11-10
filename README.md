@@ -71,8 +71,9 @@ The tools act as your user account, not inside a sandbox:
 - A call may carry an `operation_scope`, which confines that call's command under
   macOS Seatbelt and its file writes to the scoped Full roots; Linux refuses
   scoped commands. Typed file tools check scope by path spelling, so another
-  spelling of the same place (such as `/System/Volumes/Data/...`) can pass them. The calling client chooses whether to send it, so it does not
-  restrain an untrusted agent.
+  spelling of the same place (such as `/System/Volumes/Data/...`) can pass them.
+  The calling client chooses whether to send a scope, so it does not restrain an
+  untrusted agent.
 - File contents and command output go to the client and its model provider;
   redaction is best effort.
 
