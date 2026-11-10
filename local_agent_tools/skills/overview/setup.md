@@ -52,7 +52,8 @@ state directory. One server runs per state directory, because its background
 Task observer must be the only one there; a second server on the same directory is
 refused. Give each MCP client its own `--state-dir` under
 `~/.local/state/local-agent-tools/`, which scoped commands cannot reach; a state
-directory or custom `--config` elsewhere is protected only for its own server. Each state directory
+directory elsewhere is protected only for its own server, and a custom `--config`
+outside `~/.config/local-agent-tools/` is not protected. Each state directory
 coordinates only itself: workspace leases, writer locks, Task reservations and
 change records do not cover other clients, so give concurrent clients separate
 workspaces or worktrees.

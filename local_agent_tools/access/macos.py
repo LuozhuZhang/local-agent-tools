@@ -264,7 +264,11 @@ def claim(private: Path) -> None:
     """Create this execution's private directory; an existing one belongs to someone else (FileExistsError)."""
     private.parent.parent.mkdir(mode=0o700, exist_ok=True)
     private.parent.mkdir(mode=0o700, exist_ok=True)
-    private.mkdir(mode=0o700)
+    try:
+        private.mkdir(mode=0o700)
+    except FileExistsError as error:
+        raise Fault("scope_private_conflict", "This execution's private directory already exists; no command was launched.",
+                    effect="known_no_effect") from error
 
 
 def prepare(private: Path, identity: dict[str, str]) -> None:

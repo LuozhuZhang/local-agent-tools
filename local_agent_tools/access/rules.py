@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
+import sys
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -218,6 +219,8 @@ def compile(config, state: Path, machine: str, value: dict) -> Scope:
         raise Fault("scope_invalid", "Scope bindings must target this machine and be distinct.", effect="known_no_effect")
     home = macos.account_home()
     control = control_paths(state)
+    # A root around or inside the private root would re-allow other executions' private homes.
+    private = [Path(os.path.realpath(macos.private_root()))] if sys.platform == "darwin" else []
     roots = []
     for item in model.roots:
         try:
@@ -232,8 +235,8 @@ def compile(config, state: Path, machine: str, value: dict) -> Scope:
         if path == Path("/") or _inside(home, path):
             raise Fault("scope_too_broad", "Use device Read Only or Full Access for / or the account home.",
                         effect="known_no_effect")
-        if any(_inside(path, item) or _inside(item, path) for item in control):
-            raise Fault("scope_conflict", "A selected directory overlaps server configuration or state.",
+        if any(_inside(path, item) or _inside(item, path) for item in (*control, *private)):
+            raise Fault("scope_conflict", "A selected directory overlaps server configuration, state or private homes.",
                         effect="known_no_effect")
         roots.append(Root(path, item.mode, item.target_id, (info.st_dev, info.st_ino)))
     for root in roots:

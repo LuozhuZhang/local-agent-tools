@@ -69,8 +69,8 @@ The tools act as your user account, not inside a sandbox:
 - With Full Access, enabled commands and file writes apply to everything your
   account can change, not only configured workspaces.
 - A call may carry an `operation_scope`, which confines that call's command under
-  macOS Seatbelt and its file tools to the scoped roots; Linux refuses scoped
-  commands. The calling client chooses whether to send it, so it does not
+  macOS Seatbelt and its file writes to the scoped Full roots; Linux refuses
+  scoped commands. The calling client chooses whether to send it, so it does not
   restrain an untrusted agent.
 - File contents and command output go to the client and its model provider;
   redaction is best effort.
